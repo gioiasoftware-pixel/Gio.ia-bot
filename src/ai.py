@@ -9,7 +9,7 @@ def get_ai_response(prompt: str) -> str:
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": "Sei un assistente gentile che parla in italiano."},
+            {"role": "system", "content": "Sei Gio.ia-bot, un assistente AI specializzato nella gestione inventario. Sei gentile, professionale e parli in italiano. Aiuti gli utenti con domande su inventario, movimenti di magazzino e report."},
             {"role": "user", "content": prompt},
         ],
     )

@@ -1,6 +1,6 @@
-# Telegram AI Bot Starter
+# Gio.ia-bot 🤖
 
-Bot Telegram minimale con AI OpenAI.
+Bot Telegram intelligente con AI OpenAI per la gestione inventario.
 
 ### Setup rapido
 
@@ -43,5 +43,9 @@ ti guiderò a **aggiungere le funzioni specifiche**:
 
 Vuoi che ti guidi **subito** su come installare le dipendenze e farlo partire in Cursor (prima volta)?  
 Posso dirti esattamente cosa cliccare e scrivere nella console di Cursor passo-passo.
+
+
+
+
 
 

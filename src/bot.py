@@ -8,7 +8,8 @@ from .ai import get_ai_response
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Ciao! Sono il tuo bot AI 🤖\n"
+        "Ciao! Sono Gio.ia-bot 🤖\n"
+        "Il tuo assistente AI per la gestione inventario!\n"
         "Scrivimi qualcosa o chiedi /help per iniziare."
     )
 
