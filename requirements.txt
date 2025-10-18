@@ -1,0 +1,7 @@
+python-telegram-bot==21.5
+openai==1.51.0
+python-dotenv==1.0.1
+gunicorn==21.2.0
+
+
+
