@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from .config import TELEGRAM_BOT_TOKEN, BOT_MODE
 from .ai import get_ai_response
+from aiohttp import web
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,6 +26,11 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 
+async def health_check(request):
+    """Endpoint per l'healthcheck di Railway"""
+    return web.Response(text="OK", status=200)
+
+
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -44,11 +50,16 @@ def main():
         print(f"🚀 Bot avviato in modalità webhook su porta {port}")
         print(f"📡 Webhook URL: {webhook_url}")
         
+        # Crea server web per healthcheck
+        web_app = web.Application()
+        web_app.router.add_get('/health', health_check)
+        
         # Avvia il server web per i webhook
         app.run_webhook(
             listen="0.0.0.0",
             port=port,
-            webhook_url=webhook_url
+            webhook_url=webhook_url,
+            web_app=web_app
         )
     else:
         # Modalità polling per sviluppo locale
