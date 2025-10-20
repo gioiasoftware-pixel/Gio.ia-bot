@@ -94,12 +94,14 @@ ESEMPI DI RISPOSTA:
 - "Ho venduto vino" → Conferma, congratulati e suggerisci di comunicare i dettagli
 - Domande generali → Rispondi e collega sempre al contesto dell'inventario"""
 
-        # Configura client OpenAI senza parametri non supportati
+        # Configura client OpenAI con gestione errori
         try:
+            # Prova configurazione standard
             client = OpenAI(api_key=OPENAI_API_KEY)
         except Exception as e:
             logger.error(f"Errore creazione client OpenAI: {e}")
-            return "⚠️ Errore configurazione AI. Riprova tra qualche minuto."
+            # Fallback: risposta generica senza AI
+            return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
@@ -124,7 +126,7 @@ ESEMPI DI RISPOSTA:
         logger.error(f"Errore imprevisto in get_ai_response: {e}")
         logger.error(f"Tipo errore: {type(e).__name__}")
         logger.error(f"Prompt ricevuto: {prompt[:100]}...")
-        return f"⚠️ Errore interno: {str(e)[:100]}"
+        return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
 
 
 
