@@ -226,9 +226,9 @@ async def callback_handler(update, context):
     query = update.callback_query
     query.answer()
     
-    # Gestisci callback onboarding
-    if onboarding_manager.handle_callback_query(update, context):
-        return
+    # Gestisci callback onboarding (se necessario)
+    # if new_onboarding_manager.handle_callback_query(update, context):
+    #     return
     
     # Gestisci callback inventario
     if inventory_manager.handle_wine_callback(update, context):

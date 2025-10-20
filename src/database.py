@@ -133,6 +133,11 @@ class DatabaseManager:
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         
+        # Fix per URL malformate di Railway
+        if "port" in database_url and not database_url.count(":") >= 3:
+            logger.warning("DATABASE_URL malformata, usando fallback")
+            database_url = "postgresql://user:password@localhost/gioia_bot"
+        
         try:
             self.engine = create_engine(database_url, echo=False)
             self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)

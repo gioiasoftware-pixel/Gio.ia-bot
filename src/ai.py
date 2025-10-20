@@ -20,45 +20,49 @@ def get_ai_response(prompt: str, telegram_id: int = None) -> str:
         # Prepara il contesto utente se disponibile
         user_context = ""
         if telegram_id:
-            user = db_manager.get_user_by_telegram_id(telegram_id)
-            if user:
-                # Aggiungi informazioni utente
-                user_context = f"""
+            try:
+                user = db_manager.get_user_by_telegram_id(telegram_id)
+                if user:
+                    # Aggiungi informazioni utente
+                    user_context = f"""
 INFORMAZIONI UTENTE:
 - Nome attività: {user.business_name or 'Non specificato'}
 - Onboarding completato: {'Sì' if user.onboarding_completed else 'No'}
 
 INVENTARIO ATTUALE:
 """
-                # Ottieni inventario
-                wines = db_manager.get_user_wines(telegram_id)
-                if wines:
-                    user_context += f"- Totale vini: {len(wines)}\n"
-                    user_context += f"- Quantità totale: {sum(w.quantity for w in wines)} bottiglie\n"
-                    low_stock = [w for w in wines if w.quantity <= w.min_quantity]
-                    user_context += f"- Scorte basse: {len(low_stock)} vini\n\n"
+                    # Ottieni inventario
+                    wines = db_manager.get_user_wines(telegram_id)
+                    if wines:
+                        user_context += f"- Totale vini: {len(wines)}\n"
+                        user_context += f"- Quantità totale: {sum(w.quantity for w in wines)} bottiglie\n"
+                        low_stock = [w for w in wines if w.quantity <= w.min_quantity]
+                        user_context += f"- Scorte basse: {len(low_stock)} vini\n\n"
+                        
+                        # Aggiungi dettagli vini (max 10 per limitare token)
+                        user_context += "DETTAGLI VINI PRINCIPALI:\n"
+                        for wine in wines[:10]:
+                            status = "⚠️ SCORTA BASSA" if wine.quantity <= wine.min_quantity else "✅ OK"
+                            user_context += f"- {wine.name} ({wine.producer}) - {wine.quantity} bottiglie {status}\n"
+                        
+                        if len(wines) > 10:
+                            user_context += f"... e altri {len(wines) - 10} vini\n"
+                    else:
+                        user_context += "- Inventario vuoto\n"
                     
-                    # Aggiungi dettagli vini (max 10 per limitare token)
-                    user_context += "DETTAGLI VINI PRINCIPALI:\n"
-                    for wine in wines[:10]:
-                        status = "⚠️ SCORTA BASSA" if wine.quantity <= wine.min_quantity else "✅ OK"
-                        user_context += f"- {wine.name} ({wine.producer}) - {wine.quantity} bottiglie {status}\n"
-                    
-                    if len(wines) > 10:
-                        user_context += f"... e altri {len(wines) - 10} vini\n"
-                else:
-                    user_context += "- Inventario vuoto\n"
-                
-                # Aggiungi log recenti (ultimi 5 movimenti)
-                user_context += "\nMOVIMENTI RECENTI:\n"
-                logs = db_manager.get_inventory_logs(telegram_id, limit=5)
-                if logs:
-                    for log in logs:
-                        date_str = log['movement_date'].strftime("%d/%m %H:%M")
-                        tipo = "📉 Consumo" if log['movement_type'] == 'consumo' else "📈 Rifornimento"
-                        user_context += f"- {date_str}: {tipo} - {log['wine_name']} ({abs(log['quantity_change'])} bot.)\n"
-                else:
-                    user_context += "- Nessun movimento registrato\n"
+                    # Aggiungi log recenti (ultimi 5 movimenti)
+                    user_context += "\nMOVIMENTI RECENTI:\n"
+                    logs = db_manager.get_inventory_logs(telegram_id, limit=5)
+                    if logs:
+                        for log in logs:
+                            date_str = log['movement_date'].strftime("%d/%m %H:%M")
+                            tipo = "📉 Consumo" if log['movement_type'] == 'consumo' else "📈 Rifornimento"
+                            user_context += f"- {date_str}: {tipo} - {log['wine_name']} ({abs(log['quantity_change'])} bot.)\n"
+                    else:
+                        user_context += "- Nessun movimento registrato\n"
+            except Exception as e:
+                logger.error(f"Errore accesso database per utente {telegram_id}: {e}")
+                user_context = "- Database temporaneamente non disponibile\n"
         
         # Sistema prompt con contesto
         system_prompt = f"""Sei Gio.ia-bot, un assistente AI specializzato nella gestione inventario vini. Sei gentile, professionale e parli in italiano.
