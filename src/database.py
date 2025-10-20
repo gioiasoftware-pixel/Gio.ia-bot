@@ -126,20 +126,35 @@ class DatabaseManager:
             # Fallback per sviluppo locale
             database_url = "postgresql://user:password@localhost/gioia_bot"
             logger.warning("DATABASE_URL non trovata, usando fallback locale")
+        else:
+            logger.info(f"DATABASE_URL trovata: {database_url[:20]}...")
         
         # Converte URL Railway in formato SQLAlchemy
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         
-        self.engine = create_engine(database_url, echo=False)
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-        
-        # Crea le tabelle se non esistono
-        Base.metadata.create_all(bind=self.engine)
-        logger.info("Database PostgreSQL inizializzato")
+        try:
+            self.engine = create_engine(database_url, echo=False)
+            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+            
+            # Test connessione prima di creare tabelle
+            with self.engine.connect() as conn:
+                logger.info("Connessione database testata con successo")
+            
+            # Crea le tabelle se non esistono
+            Base.metadata.create_all(bind=self.engine)
+            logger.info("Database PostgreSQL inizializzato e tabelle create")
+            
+        except Exception as e:
+            logger.error(f"Errore inizializzazione database: {e}")
+            # Crea engine di fallback per evitare crash
+            self.engine = None
+            self.SessionLocal = None
     
     def get_session(self) -> Session:
         """Ottieni una sessione del database"""
+        if not self.SessionLocal:
+            raise Exception("Database non inizializzato")
         return self.SessionLocal()
     
     def get_user_by_telegram_id(self, telegram_id: int) -> Optional[User]:

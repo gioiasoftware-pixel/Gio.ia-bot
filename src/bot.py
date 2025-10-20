@@ -9,6 +9,11 @@ from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 
+# Verifica se il database è disponibile
+DATABASE_AVAILABLE = db_manager.engine is not None
+if not DATABASE_AVAILABLE:
+    logger.warning("⚠️ Database non disponibile - alcune funzionalità saranno limitate")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,15 @@ async def start_cmd(update, context):
     telegram_id = user.id
     
     logger.info(f"Comando /start da: {username} (ID: {telegram_id})")
+    
+    # Verifica disponibilità database
+    if not DATABASE_AVAILABLE:
+        await update.message.reply_text(
+            "⚠️ **Database non disponibile**\n\n"
+            "Il sistema è temporaneamente in manutenzione.\n"
+            "Riprova tra qualche minuto."
+        )
+        return
     
     # Verifica se l'onboarding è completato
     if not new_onboarding_manager.is_onboarding_complete(telegram_id):
@@ -93,6 +107,15 @@ async def chat_handler(update, context):
         telegram_id = user.id
         
         logger.info(f"Messaggio da {username} (ID: {telegram_id}): {user_text[:50]}...")
+        
+        # Verifica disponibilità database
+        if not DATABASE_AVAILABLE:
+            await update.message.reply_text(
+                "⚠️ **Database non disponibile**\n\n"
+                "Il sistema è temporaneamente in manutenzione.\n"
+                "Riprova tra qualche minuto."
+            )
+            return
         
         # Gestisci nuovo onboarding se in corso
         if new_onboarding_manager.handle_onboarding_response(update, context):
