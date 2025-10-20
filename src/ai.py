@@ -113,7 +113,9 @@ ESEMPI DI RISPOSTA:
         return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
     except Exception as e:
         logger.error(f"Errore imprevisto in get_ai_response: {e}")
-        return "⚠️ Errore interno. Contatta l'amministratore."
+        logger.error(f"Tipo errore: {type(e).__name__}")
+        logger.error(f"Prompt ricevuto: {prompt[:100]}...")
+        return f"⚠️ Errore interno: {str(e)[:100]}"
 
 
 
