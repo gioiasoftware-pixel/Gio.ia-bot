@@ -102,16 +102,26 @@ class Transaction(Base):
     wine = relationship("Wine", back_populates="transactions")
 
 class DatabaseManager:
-    """Gestore del database"""
+    """Gestore del database PostgreSQL"""
     
-    def __init__(self, db_path: str = "gioia_bot.db"):
-        self.db_path = db_path
-        self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    def __init__(self):
+        # Usa DATABASE_URL da Railway PostgreSQL
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            # Fallback per sviluppo locale
+            database_url = "postgresql://user:password@localhost/gioia_bot"
+            logger.warning("DATABASE_URL non trovata, usando fallback locale")
+        
+        # Converte URL Railway in formato SQLAlchemy
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        
+        self.engine = create_engine(database_url, echo=False)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         
         # Crea le tabelle se non esistono
         Base.metadata.create_all(bind=self.engine)
-        logger.info(f"Database inizializzato: {db_path}")
+        logger.info("Database PostgreSQL inizializzato")
     
     def get_session(self) -> Session:
         """Ottieni una sessione del database"""

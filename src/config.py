@@ -14,6 +14,9 @@ BOT_MODE = os.getenv("BOT_MODE", "polling")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", 8000))
 
+# Database PostgreSQL
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 def validate_config():
     """Valida le configurazioni critiche all'avvio."""
     errors = []
@@ -23,6 +26,9 @@ def validate_config():
     
     if not OPENAI_API_KEY:
         errors.append("OPENAI_API_KEY non configurato")
+    
+    if not DATABASE_URL:
+        errors.append("DATABASE_URL non configurato (PostgreSQL)")
     
     if BOT_MODE == "webhook" and not WEBHOOK_URL:
         errors.append("WEBHOOK_URL richiesta in modalità webhook")
@@ -34,6 +40,3 @@ def validate_config():
     
     logger.info("✅ Configurazione validata con successo")
     return True
-
-
-
