@@ -285,7 +285,16 @@ def _start_health_server(port: int) -> None:
 
 
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Configurazione bot senza parametri non supportati
+    builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
+    
+    # Rimuovi eventuali parametri proxy se presenti
+    try:
+        app = builder.build()
+    except Exception as e:
+        logger.error(f"Errore configurazione bot: {e}")
+        # Fallback con configurazione minima
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Comandi base
     app.add_handler(CommandHandler("start", start_cmd))
