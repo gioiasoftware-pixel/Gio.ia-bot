@@ -7,25 +7,75 @@ from .ai import get_ai_response
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-BOT_MODE = os.environ.get("BOT_MODE", "webhook")
-PORT = int(os.environ.get("PORT", "8080"))  # Railway la setta in automatico
+# Carica variabili ambiente direttamente (senza validazione complessa)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+BOT_MODE = os.getenv("BOT_MODE", "webhook")
+PORT = int(os.getenv("PORT", "8080"))  # Railway la setta in automatico
+
+# Validazione base
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN non configurato!")
+    exit(1)
 
 
 async def start_cmd(update, context):
-    await update.message.reply_text("Ciao! Sono attivo 🚀")
+    user = update.effective_user
+    username = user.username or user.first_name or "Utente"
+    logger.info(f"Nuovo utente: {username} (ID: {user.id})")
+    
+    welcome_text = (
+        f"Ciao {username}! 👋\n\n"
+        "🤖 Sono **Gio.ia-bot**, il tuo assistente AI per la gestione inventario!\n\n"
+        "📋 **Cosa posso fare:**\n"
+        "• Rispondere alle tue domande\n"
+        "• Aiutarti con la gestione inventario\n"
+        "• Fornire report e statistiche\n\n"
+        "💬 **Come usarmi:**\n"
+        "Scrivi semplicemente la tua domanda o usa /help per vedere i comandi.\n\n"
+        "🚀 **Pronto ad aiutarti!**"
+    )
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 
 async def help_cmd(update, context):
-    await update.message.reply_text("Comandi: /start, /help")
+    help_text = (
+        "🤖 **Gio.ia-bot - Comandi disponibili:**\n\n"
+        "📋 **Comandi base:**\n"
+        "• `/start` - Avvia il bot e mostra il benvenuto\n"
+        "• `/help` - Mostra questo messaggio di aiuto\n\n"
+        "💬 **Chat AI:**\n"
+        "Scrivi qualsiasi messaggio per chattare con l'AI!\n\n"
+        "🔧 **Funzionalità:**\n"
+        "• Gestione inventario\n"
+        "• Report e statistiche\n"
+        "• Assistenza AI specializzata\n\n"
+        "❓ **Esempi di domande:**\n"
+        "• \"Quanto inventario ho di X?\"\n"
+        "• \"Fammi un report delle vendite\"\n"
+        "• \"Come gestire il magazzino?\"\n\n"
+        "🚀 **Inizia subito scrivendo la tua domanda!**"
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
 
 async def chat_handler(update, context):
-    user_text = update.message.text
-    await update.message.reply_text("💭 Sto pensando...")
-    reply = get_ai_response(user_text)
-    await update.message.reply_text(reply)
+    try:
+        user = update.effective_user
+        user_text = update.message.text
+        username = user.username or user.first_name or "Unknown"
+        
+        logger.info(f"Messaggio da {username} (ID: {user.id}): {user_text[:50]}...")
+        
+        await update.message.reply_text("💭 Sto pensando...")
+        reply = get_ai_response(user_text)
+        
+        await update.message.reply_text(reply)
+        logger.info(f"Risposta inviata a {username}")
+        
+    except Exception as e:
+        logger.error(f"Errore in chat_handler: {e}")
+        await update.message.reply_text("⚠️ Errore temporaneo. Riprova tra qualche minuto.")
 
 
 async def healthcheck_handler(request: web.Request):
