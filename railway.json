@@ -5,7 +5,7 @@
   },
   "deploy": {
     "startCommand": "python -m src.bot",
-    "healthcheckPath": "/health",
+    "healthcheckPath": "/healthcheck",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10

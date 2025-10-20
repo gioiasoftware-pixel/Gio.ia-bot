@@ -67,6 +67,13 @@ async def health_check(request):
     return web.Response(text="OK", status=200)
 
 
+async def healthcheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler per l'healthcheck via comando Telegram"""
+    await update.message.reply_text("OK", parse_mode=None)
+
+
+
+
 async def _run_health_only_server(port: int) -> None:
     """Avvia solo il server per l'healthcheck, utile quando il WEBHOOK_URL manca.
     Mantiene il processo vivo per permettere a Railway di passare l'healthcheck.
@@ -93,6 +100,7 @@ def main():
         app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("help", help))
+        app.add_handler(CommandHandler("healthcheck", healthcheck_handler))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
         
         # Controlla se siamo su Railway (webhook) o locale (polling)
@@ -109,16 +117,11 @@ def main():
             webhook_display = WEBHOOK_URL.replace(WEBHOOK_URL.split('/')[-1], "***") if WEBHOOK_URL else "Non configurata"
             logger.info(f"📡 Webhook URL: {webhook_display}")
             
-            # Crea server web per healthcheck
-            web_app = web.Application()
-            web_app.router.add_get('/health', health_check)
-            
             # Avvia il server web per i webhook
             app.run_webhook(
                 listen="0.0.0.0",
                 port=PORT,
-                webhook_url=WEBHOOK_URL,
-                web_app=web_app
+                webhook_url=WEBHOOK_URL
             )
         else:
             # Modalità polling per sviluppo locale
