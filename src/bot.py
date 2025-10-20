@@ -62,14 +62,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Errore temporaneo. Riprova tra qualche minuto.")
 
 
-async def health_check(request):
-    """Endpoint per l'healthcheck di Railway"""
+async def healthcheck_handler(request: web.Request):
+    """Endpoint HTTP per l'healthcheck di Railway"""
+    logger.info("Healthcheck richiesto")
     return web.Response(text="OK", status=200)
-
-
-async def healthcheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler per l'healthcheck via comando Telegram"""
-    await update.message.reply_text("OK", parse_mode=None)
 
 
 
@@ -100,7 +96,6 @@ def main():
         app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("help", help))
-        app.add_handler(CommandHandler("healthcheck", healthcheck_handler))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
         
         # Controlla se siamo su Railway (webhook) o locale (polling)
@@ -117,11 +112,17 @@ def main():
             webhook_display = WEBHOOK_URL.replace(WEBHOOK_URL.split('/')[-1], "***") if WEBHOOK_URL else "Non configurata"
             logger.info(f"📡 Webhook URL: {webhook_display}")
             
-            # Avvia il server web per i webhook
+            # Crea server aiohttp con endpoint healthcheck
+            web_app = web.Application()
+            web_app.router.add_get("/healthcheck", healthcheck_handler)
+            
+            # Avvia il server web per i webhook con aiohttp integrato
             app.run_webhook(
                 listen="0.0.0.0",
                 port=PORT,
-                webhook_url=WEBHOOK_URL
+                webhook_url=WEBHOOK_URL,
+                webhook_path="/webhook",
+                web_app=web_app
             )
         else:
             # Modalità polling per sviluppo locale
