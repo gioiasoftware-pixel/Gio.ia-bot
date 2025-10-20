@@ -4,9 +4,10 @@ from aiohttp import web
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from .ai import get_ai_response
 from .database import db_manager
-from .onboarding import onboarding_manager
+from .new_onboarding import new_onboarding_manager
 from .inventory import inventory_manager
 from .file_upload import file_upload_manager
+from .inventory_movements import inventory_movement_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,27 +32,23 @@ async def start_cmd(update, context):
     logger.info(f"Comando /start da: {username} (ID: {telegram_id})")
     
     # Verifica se l'onboarding è completato
-    if not onboarding_manager.is_onboarding_complete(telegram_id):
-        # Avvia onboarding
-        await update.message.reply_text(
-            f"Ciao {username}! 👋\n\n"
-            "🤖 Benvenuto in **Gio.ia-bot**!\n"
-            "Il tuo assistente AI per la gestione inventario vini.\n\n"
-            "📝 Prima di iniziare, completiamo insieme la configurazione del tuo profilo..."
-        )
-        onboarding_manager.start_onboarding(update, context)
+    if not new_onboarding_manager.is_onboarding_complete(telegram_id):
+        # Avvia nuovo onboarding
+        new_onboarding_manager.start_new_onboarding(update, context)
     else:
         # Onboarding già completato
         user_data = db_manager.get_user_by_telegram_id(telegram_id)
         welcome_text = (
             f"Bentornato {username}! 👋\n\n"
-            f"🏢 **{user_data.business_name}** - {user_data.business_type}\n"
-            f"📍 {user_data.location}\n\n"
+            f"🏢 **{user_data.business_name}**\n\n"
             "🤖 **Gio.ia-bot** è pronto ad aiutarti con:\n"
             "• 📦 Gestione inventario vini\n"
             "• 📊 Report e statistiche\n"
             "• 💡 Consigli personalizzati\n\n"
-            "💬 Scrivi la tua domanda o usa /help per i comandi!"
+            "💬 **Comunica i movimenti:**\n"
+            "• 'Ho venduto 2 bottiglie di Chianti'\n"
+            "• 'Ho ricevuto 10 bottiglie di Barolo'\n\n"
+            "📋 Usa /help per tutti i comandi!"
         )
         await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
@@ -65,7 +62,8 @@ async def help_cmd(update, context):
         "• `/inventario` - Visualizza il tuo inventario vini\n"
         "• `/aggiungi` - Aggiungi un nuovo vino\n"
         "• `/upload` - Carica inventario da file/foto\n"
-        "• `/scorte` - Mostra vini con scorte basse\n\n"
+        "• `/scorte` - Mostra vini con scorte basse\n"
+        "• `/log` - Mostra movimenti inventario\n\n"
         "💬 **Chat AI intelligente:**\n"
         "Scrivi qualsiasi domanda per ricevere aiuto personalizzato!\n\n"
         "🔧 **Funzionalità avanzate:**\n"
@@ -78,6 +76,10 @@ async def help_cmd(update, context):
         "• \"Fammi un report del mio inventario\"\n"
         "• \"Come organizzare il magazzino?\"\n"
         "• \"Suggeriscimi vini da aggiungere\"\n\n"
+        "💬 **Comunica movimenti:**\n"
+        "• \"Ho venduto 2 bottiglie di Chianti\"\n"
+        "• \"Ho ricevuto 10 bottiglie di Barolo\"\n"
+        "• \"Ho consumato 1 bottiglia di Prosecco\"\n\n"
         "🚀 **Inizia subito scrivendo la tua domanda!**"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -92,8 +94,12 @@ async def chat_handler(update, context):
         
         logger.info(f"Messaggio da {username} (ID: {telegram_id}): {user_text[:50]}...")
         
-        # Gestisci onboarding se in corso
-        if onboarding_manager.handle_onboarding_response(update, context):
+        # Gestisci nuovo onboarding se in corso
+        if new_onboarding_manager.handle_onboarding_response(update, context):
+            return
+        
+        # Gestisci movimenti inventario
+        if inventory_movement_manager.process_movement_message(update, context):
             return
         
         # Gestisci aggiunta vino se in corso
@@ -132,6 +138,63 @@ async def scorte_cmd(update, context):
 async def upload_cmd(update, context):
     """Avvia il processo di upload inventario"""
     file_upload_manager.start_upload_process(update, context)
+
+
+async def log_cmd(update, context):
+    """Mostra i log dei movimenti inventario"""
+    inventory_movement_manager.show_movement_logs(update, context)
+
+
+async def handle_document_with_onboarding(update, context):
+    """Gestisce documenti durante onboarding o normale upload"""
+    user = update.effective_user
+    telegram_id = user.id
+    
+    # Verifica se è in onboarding
+    if context.user_data.get('onboarding_step') == 'upload_file':
+        # Gestisci durante onboarding
+        document = update.message.document
+        file_data = await context.bot.get_file(document.file_id)
+        file_bytes = await file_data.download_as_bytearray()
+        
+        # Determina tipo file
+        file_name = document.file_name.lower()
+        if file_name.endswith('.csv'):
+            file_type = 'csv'
+        elif file_name.endswith(('.xlsx', '.xls')):
+            file_type = 'excel'
+        else:
+            await update.message.reply_text("❌ Formato file non supportato. Usa CSV o Excel.")
+            return
+        
+        # Processa con nuovo onboarding
+        new_onboarding_manager.handle_file_upload_during_onboarding(
+            update, context, file_type, file_bytes
+        )
+    else:
+        # Gestisci upload normale
+        file_upload_manager.handle_document(update, context)
+
+
+async def handle_photo_with_onboarding(update, context):
+    """Gestisce foto durante onboarding o normale upload"""
+    user = update.effective_user
+    telegram_id = user.id
+    
+    # Verifica se è in onboarding
+    if context.user_data.get('onboarding_step') == 'upload_file':
+        # Gestisci durante onboarding
+        photo = update.message.photo[-1]  # Prendi la foto più grande
+        file_data = await context.bot.get_file(photo.file_id)
+        file_bytes = await file_data.download_as_bytearray()
+        
+        # Processa con nuovo onboarding
+        new_onboarding_manager.handle_file_upload_during_onboarding(
+            update, context, 'photo', file_bytes
+        )
+    else:
+        # Gestisci upload normale
+        file_upload_manager.handle_photo(update, context)
 
 
 # Gestione callback query
@@ -210,6 +273,7 @@ def main():
     app.add_handler(CommandHandler("aggiungi", aggiungi_cmd))
     app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("scorte", scorte_cmd))
+    app.add_handler(CommandHandler("log", log_cmd))
     
     # Callback query handler
     app.add_handler(CallbackQueryHandler(callback_handler))
@@ -218,8 +282,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     
     # File handlers
-    app.add_handler(MessageHandler(filters.Document.ALL, file_upload_manager.handle_document))
-    app.add_handler(MessageHandler(filters.PHOTO, file_upload_manager.handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document_with_onboarding))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_onboarding))
 
     # Su Railway usiamo polling + server HTTP per healthcheck sulla PORT
     use_polling_with_health = os.getenv("RAILWAY_ENVIRONMENT") is not None or BOT_MODE != "webhook"

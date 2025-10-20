@@ -36,7 +36,8 @@ class User(Base):
     
     # Relazioni
     wines = relationship("Wine", back_populates="user", cascade="all, delete-orphan")
-    transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
+    inventory_backups = relationship("InventoryBackup", back_populates="user", cascade="all, delete-orphan")
+    inventory_logs = relationship("InventoryLog", back_populates="user", cascade="all, delete-orphan")
 
 class Wine(Base):
     """Modello per l'inventario vini"""
@@ -74,32 +75,46 @@ class Wine(Base):
     
     # Relazioni
     user = relationship("User", back_populates="wines")
-    transactions = relationship("Transaction", back_populates="wine")
 
-class Transaction(Base):
-    """Modello per le transazioni (acquisti/vendite)"""
-    __tablename__ = 'transactions'
+class InventoryBackup(Base):
+    """Backup dell'inventario iniziale per ogni utente"""
+    __tablename__ = 'inventory_backups'
     
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    wine_id = Column(Integer, ForeignKey('wines.id'), nullable=False)
     
-    # Tipo transazione
-    transaction_type = Column(String(20), nullable=False)  # 'purchase', 'sale', 'adjustment'
-    quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float)
-    total_amount = Column(Float)
-    
-    # Dettagli
-    supplier_customer = Column(String(200))  # Fornitore o cliente
-    notes = Column(Text)
+    # Dati del backup
+    backup_name = Column(String(200), nullable=False)  # "Inventario Iniziale", "Backup Giorno X"
+    backup_data = Column(Text, nullable=False)  # JSON con tutti i dati inventario
+    backup_type = Column(String(20), default="initial")  # 'initial', 'daily', 'manual'
     
     # Metadati
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relazioni
-    user = relationship("User", back_populates="transactions")
-    wine = relationship("Wine", back_populates="transactions")
+    user = relationship("User", back_populates="inventory_backups")
+
+class InventoryLog(Base):
+    """Log di consumi e rifornimenti per ogni utente"""
+    __tablename__ = 'inventory_logs'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    
+    # Dati del movimento
+    wine_name = Column(String(200), nullable=False)
+    wine_producer = Column(String(200))
+    movement_type = Column(String(20), nullable=False)  # 'consumo', 'rifornimento', 'aggiustamento'
+    quantity_change = Column(Integer, nullable=False)  # Positivo per rifornimenti, negativo per consumi
+    quantity_before = Column(Integer, nullable=False)  # Quantità prima del movimento
+    quantity_after = Column(Integer, nullable=False)   # Quantità dopo il movimento
+    
+    # Dettagli
+    notes = Column(Text)
+    movement_date = Column(DateTime, default=datetime.utcnow)
+    
+    # Relazioni
+    user = relationship("User", back_populates="inventory_logs")
 
 class DatabaseManager:
     """Gestore del database PostgreSQL"""
@@ -131,6 +146,11 @@ class DatabaseManager:
         """Trova un utente per Telegram ID"""
         with self.get_session() as session:
             return session.query(User).filter(User.telegram_id == telegram_id).first()
+    
+    def get_all_users(self) -> List[User]:
+        """Ottieni tutti gli utenti"""
+        with self.get_session() as session:
+            return session.query(User).all()
     
     def create_user(self, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None) -> User:
         """Crea un nuovo utente"""
@@ -228,11 +248,120 @@ class DatabaseManager:
             low_stock_count = len([w for w in wines if w.quantity <= w.min_quantity])
             
             return {
-                "total_wines": total_wines,
-                "total_quantity": total_quantity,
-                "low_stock_count": low_stock_count,
-                "onboarding_completed": user.onboarding_completed
-            }
+            "total_wines": total_wines,
+            "total_quantity": total_quantity,
+            "low_stock_count": low_stock_count,
+            "onboarding_completed": user.onboarding_completed
+        }
+    
+    def create_inventory_backup(self, telegram_id: int, backup_name: str, backup_data: str, backup_type: str = "initial") -> bool:
+        """Crea un backup dell'inventario"""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user:
+                return False
+            
+            backup = InventoryBackup(
+                user_id=user.id,
+                backup_name=backup_name,
+                backup_data=backup_data,
+                backup_type=backup_type
+            )
+            session.add(backup)
+            session.commit()
+            logger.info(f"Backup creato per utente {telegram_id}: {backup_name}")
+            return True
+    
+    def add_inventory_log(self, telegram_id: int, wine_name: str, wine_producer: str, 
+                         movement_type: str, quantity_change: int, quantity_before: int, 
+                         quantity_after: int, notes: str = None) -> bool:
+        """Aggiunge un log di movimento inventario"""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user:
+                return False
+            
+            log = InventoryLog(
+                user_id=user.id,
+                wine_name=wine_name,
+                wine_producer=wine_producer,
+                movement_type=movement_type,
+                quantity_change=quantity_change,
+                quantity_before=quantity_before,
+                quantity_after=quantity_after,
+                notes=notes
+            )
+            session.add(log)
+            session.commit()
+            logger.info(f"Log aggiunto per utente {telegram_id}: {movement_type} {wine_name}")
+            return True
+    
+    def get_inventory_logs(self, telegram_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """Ottieni i log di inventario di un utente"""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user:
+                return []
+            
+            logs = session.query(InventoryLog).filter(
+                InventoryLog.user_id == user.id
+            ).order_by(InventoryLog.movement_date.desc()).limit(limit).all()
+            
+            return [
+                {
+                    'id': log.id,
+                    'wine_name': log.wine_name,
+                    'wine_producer': log.wine_producer,
+                    'movement_type': log.movement_type,
+                    'quantity_change': log.quantity_change,
+                    'quantity_before': log.quantity_before,
+                    'quantity_after': log.quantity_after,
+                    'notes': log.notes,
+                    'movement_date': log.movement_date
+                }
+                for log in logs
+            ]
+    
+    def update_wine_quantity_with_log(self, telegram_id: int, wine_name: str, 
+                                    quantity_change: int, movement_type: str, notes: str = None) -> bool:
+        """Aggiorna quantità vino e crea log"""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user:
+                return False
+            
+            # Trova il vino
+            wine = session.query(Wine).filter(
+                Wine.user_id == user.id,
+                Wine.name.ilike(f"%{wine_name}%")
+            ).first()
+            
+            if not wine:
+                return False
+            
+            quantity_before = wine.quantity
+            quantity_after = quantity_before + quantity_change
+            
+            # Aggiorna quantità
+            wine.quantity = quantity_after
+            wine.updated_at = datetime.utcnow()
+            
+            # Crea log
+            log = InventoryLog(
+                user_id=user.id,
+                wine_name=wine.name,
+                wine_producer=wine.producer,
+                movement_type=movement_type,
+                quantity_change=quantity_change,
+                quantity_before=quantity_before,
+                quantity_after=quantity_after,
+                notes=notes
+            )
+            session.add(log)
+            session.commit()
+            
+            logger.info(f"Quantità aggiornata per {wine.name}: {quantity_before} -> {quantity_after}")
+            return True
 
 # Istanza globale del database
 db_manager = DatabaseManager()
