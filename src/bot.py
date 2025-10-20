@@ -50,7 +50,7 @@ def main():
             listen="0.0.0.0",
             port=PORT,
             webhook_url=WEBHOOK_URL,
-            webhook_path="/webhook",
+            url_path="/webhook",
             web_app=web_app,
         )
     else:
