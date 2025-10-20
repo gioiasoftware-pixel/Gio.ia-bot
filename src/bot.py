@@ -67,6 +67,25 @@ async def start_cmd(update, context):
         await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 
+async def testai_cmd(update, context):
+    """Comando per testare OpenAI API"""
+    try:
+        from .ai import get_ai_response
+        response = get_ai_response("test", update.effective_user.id)
+        await update.message.reply_text(f"✅ Test AI: {response[:100]}...")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Errore test AI: {e}")
+
+
+async def deletewebhook_cmd(update, context):
+    """Comando per rimuovere webhook (temporaneo)"""
+    try:
+        await context.bot.delete_webhook()
+        await update.message.reply_text("✅ Webhook rimosso con successo!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Errore rimozione webhook: {e}")
+
+
 async def help_cmd(update, context):
     help_text = (
         "🤖 **Gio.ia-bot - Comandi disponibili:**\n\n"
@@ -299,6 +318,8 @@ def main():
     # Comandi base
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("testai", testai_cmd))
+    app.add_handler(CommandHandler("deletewebhook", deletewebhook_cmd))
     
     # Comandi inventario
     app.add_handler(CommandHandler("inventario", inventario_cmd))

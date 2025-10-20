@@ -1,7 +1,14 @@
 import logging
+import os
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_API_KEY, OPENAI_MODEL
 from .database import db_manager
+
+# Disabilita eventuali proxy automatici che potrebbero causare conflitti
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
 
 logger = logging.getLogger(__name__)
 
@@ -94,24 +101,36 @@ ESEMPI DI RISPOSTA:
 - "Ho venduto vino" → Conferma, congratulati e suggerisci di comunicare i dettagli
 - Domande generali → Rispondi e collega sempre al contesto dell'inventario"""
 
-        # Configura client OpenAI con gestione errori
+        # Configura client OpenAI con parametri espliciti
         try:
-            # Prova configurazione standard
-            client = OpenAI(api_key=OPENAI_API_KEY)
+            # Configurazione esplicita per evitare conflitti
+            client = OpenAI(
+                api_key=OPENAI_API_KEY,
+                timeout=30.0,
+                max_retries=3
+            )
         except Exception as e:
             logger.error(f"Errore creazione client OpenAI: {e}")
-            # Fallback: risposta generica senza AI
-            return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt.strip()},
-            ],
-            max_tokens=1500,
-            temperature=0.7,
-            timeout=30
-        )
+            # Prova configurazione minima
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+            except Exception as e2:
+                logger.error(f"Errore anche con configurazione minima: {e2}")
+                return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
+        # Chiamata API con gestione errori robusta
+        try:
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt.strip()},
+                ],
+                max_tokens=1500,
+                temperature=0.7
+            )
+        except Exception as e:
+            logger.error(f"Errore chiamata API OpenAI: {e}")
+            return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
         
         if not response.choices or not response.choices[0].message.content:
             logger.error("Risposta vuota da OpenAI")
