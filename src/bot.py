@@ -9,13 +9,13 @@ from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Verifica se il database è disponibile
 DATABASE_AVAILABLE = db_manager.engine is not None
 if not DATABASE_AVAILABLE:
     logger.warning("⚠️ Database non disponibile - alcune funzionalità saranno limitate")
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Carica variabili ambiente direttamente (senza validazione complessa)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
