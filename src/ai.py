@@ -94,7 +94,12 @@ ESEMPI DI RISPOSTA:
 - "Ho venduto vino" → Conferma, congratulati e suggerisci di comunicare i dettagli
 - Domande generali → Rispondi e collega sempre al contesto dell'inventario"""
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        # Configura client OpenAI senza parametri non supportati
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+        except Exception as e:
+            logger.error(f"Errore creazione client OpenAI: {e}")
+            return "⚠️ Errore configurazione AI. Riprova tra qualche minuto."
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[

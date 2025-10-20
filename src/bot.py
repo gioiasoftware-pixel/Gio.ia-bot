@@ -323,8 +323,18 @@ def main():
         logger.info(f"Starting health server + polling on 0.0.0.0:{PORT}")
         # Avvia server health (thread daemon) e poi polling
         _start_health_server(PORT)
-        # Avvia il polling (bloccante)
-        app.run_polling()
+        # Avvia il polling (bloccante) con gestione conflitti
+        try:
+            app.run_polling(
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+        except Exception as e:
+            logger.error(f"Errore polling: {e}")
+            logger.info("Riprovo polling in 5 secondi...")
+            import time
+            time.sleep(5)
+            app.run_polling(drop_pending_updates=True)
         return
 
     # Modalità webhook classica (senza health server, non compatibile su PTB 21.5)
