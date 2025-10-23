@@ -2,21 +2,22 @@
 """
 Script di avvio per il microservizio processor
 """
-import os
-import sys
 import uvicorn
-from main import app
+import os
+import logging
+
+# Configura logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
-    # Porta del processor (diversa dal bot principale)
     port = int(os.getenv("PROCESSOR_PORT", 8001))
-    
-    print(f"🚀 Avvio microservizio processor su porta {port}")
+    logger.info(f"🚀 Avvio microservizio processor su porta {port}")
     
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=port,
-        reload=True,
+        reload=False,
         log_level="info"
     )
