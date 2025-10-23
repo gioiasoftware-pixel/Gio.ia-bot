@@ -114,18 +114,18 @@ ESEMPI DI RISPOSTA:
         logger.info(f"System prompt length: {len(system_prompt)}")
         logger.info(f"User prompt: {prompt[:100]}...")
 
-        # Configura client OpenAI con parametri espliciti
+        # Configura client OpenAI versione 2.x
         try:
-            # Configurazione esplicita per evitare conflitti
             import openai
             logger.info(f"OpenAI version: {openai.__version__}")
             
-            # Crea client con configurazione minima
+            # Crea client OpenAI con configurazione semplice
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             logger.info("Client OpenAI creato con successo")
         except Exception as e:
             logger.error(f"Errore creazione client OpenAI: {e}")
             logger.error(f"Tipo errore: {type(e).__name__}")
+            logger.error(f"Errore completo: {str(e)}")
             return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
         # Chiamata API con gestione errori robusta
         try:
