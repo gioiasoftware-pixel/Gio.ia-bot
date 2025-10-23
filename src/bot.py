@@ -6,7 +6,7 @@ from .ai import get_ai_response
 from .database import db_manager
 from .new_onboarding import new_onboarding_manager
 from .inventory import inventory_manager
-from .file_upload_simple import file_upload_manager
+from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 
 logging.basicConfig(level=logging.INFO)
