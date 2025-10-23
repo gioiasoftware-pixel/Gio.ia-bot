@@ -17,6 +17,9 @@ PORT = int(os.getenv("PORT", 8000))
 # Database PostgreSQL
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Processor Microservice
+PROCESSOR_URL = os.getenv("PROCESSOR_URL", "http://localhost:8001")
+
 def validate_config():
     """Valida le configurazioni critiche all'avvio."""
     errors = []
@@ -32,6 +35,10 @@ def validate_config():
     
     if BOT_MODE == "webhook" and not WEBHOOK_URL:
         errors.append("WEBHOOK_URL richiesta in modalità webhook")
+    
+    # Processor URL è opzionale (default localhost)
+    if not PROCESSOR_URL:
+        logger.warning("PROCESSOR_URL non configurato, usando localhost:8001")
     
     if errors:
         error_msg = "❌ Configurazione mancante:\n" + "\n".join(f"  - {error}" for error in errors)

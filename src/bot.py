@@ -6,7 +6,7 @@ from .ai import get_ai_response
 from .database import db_manager
 from .new_onboarding import new_onboarding_manager
 from .inventory import inventory_manager
-from .file_upload import file_upload_manager
+from .file_upload_simple import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 
 logging.basicConfig(level=logging.INFO)
@@ -76,6 +76,37 @@ async def testai_cmd(update, context):
     except Exception as e:
         await update.message.reply_text(f"❌ Errore test AI: {e}")
 
+async def testprocessor_cmd(update, context):
+    """Test connessione processor"""
+    import aiohttp
+    from .config import PROCESSOR_URL
+    
+    await update.message.reply_text("🔗 Test connessione processor...")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{PROCESSOR_URL}/health") as response:
+                if response.status == 200:
+                    result = await response.json()
+                    await update.message.reply_text(
+                        f"✅ **Processor connesso!**\n\n"
+                        f"URL: {PROCESSOR_URL}\n"
+                        f"Status: {result.get('status', 'unknown')}\n"
+                        f"Service: {result.get('service', 'unknown')}"
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ **Processor non raggiungibile**\n\n"
+                        f"URL: {PROCESSOR_URL}\n"
+                        f"Status: {response.status}"
+                    )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ **Errore connessione processor**\n\n"
+            f"URL: {PROCESSOR_URL}\n"
+            f"Errore: {str(e)}"
+        )
+
 
 async def deletewebhook_cmd(update, context):
     """Comando per rimuovere webhook (temporaneo)"""
@@ -104,6 +135,9 @@ async def help_cmd(update, context):
         "• ⚠️ Alert scorte basse\n"
         "• 💡 Consigli gestione magazzino\n"
         "• 📈 Report e statistiche\n\n"
+        "🛠️ **Comandi tecnici:**\n"
+        "• `/testai` - Test connessione AI\n"
+        "• `/testprocessor` - Test connessione processor\n\n"
         "❓ **Esempi di domande:**\n"
         "• \"Quali vini devo riordinare?\"\n"
         "• \"Fammi un report del mio inventario\"\n"
@@ -329,6 +363,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("testai", testai_cmd))
+    app.add_handler(CommandHandler("testprocessor", testprocessor_cmd))
     app.add_handler(CommandHandler("deletewebhook", deletewebhook_cmd))
     
     # Comandi inventario

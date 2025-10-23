@@ -1,12 +1,9 @@
 """
 Gestione upload file inventario (CSV, Excel, foto con OCR)
+NOTA: L'elaborazione dei file è ora gestita dal microservizio processor
 """
 import os
 import logging
-import pandas as pd
-import pytesseract
-from PIL import Image
-import io
 from typing import List, Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -181,59 +178,19 @@ class FileUploadManager:
             )
     
     def _process_csv(self, file_content: bytes) -> List[Dict[str, Any]]:
-        """Processa file CSV"""
-        try:
-            # Leggi CSV
-            df = pd.read_csv(io.BytesIO(file_content))
-            
-            # Verifica intestazione
-            missing_headers = [h for h in self.required_headers if h not in df.columns]
-            if missing_headers:
-                logger.warning(f"Intestazioni mancanti: {missing_headers}")
-                # Prova a mappare colonne simili
-                df = self._map_similar_columns(df)
-            
-            return self._dataframe_to_wines(df)
-            
-        except Exception as e:
-            logger.error(f"Errore processamento CSV: {e}")
-            return []
+        """Processa file CSV - DEPRECATO: ora gestito dal processor"""
+        logger.warning("_process_csv chiamato ma l'elaborazione è ora gestita dal processor")
+        return []
     
     def _process_excel(self, file_content: bytes) -> List[Dict[str, Any]]:
-        """Processa file Excel"""
-        try:
-            # Leggi Excel
-            df = pd.read_excel(io.BytesIO(file_content))
-            
-            # Verifica intestazione
-            missing_headers = [h for h in self.required_headers if h not in df.columns]
-            if missing_headers:
-                logger.warning(f"Intestazioni mancanti: {missing_headers}")
-                # Prova a mappare colonne simili
-                df = self._map_similar_columns(df)
-            
-            return self._dataframe_to_wines(df)
-            
-        except Exception as e:
-            logger.error(f"Errore processamento Excel: {e}")
-            return []
+        """Processa file Excel - DEPRECATO: ora gestito dal processor"""
+        logger.warning("_process_excel chiamato ma l'elaborazione è ora gestita dal processor")
+        return []
     
     def _process_photo_ocr(self, image_data: bytes) -> List[Dict[str, Any]]:
-        """Processa foto con OCR"""
-        try:
-            # Carica immagine
-            image = Image.open(io.BytesIO(image_data))
-            
-            # Configura OCR per italiano
-            custom_config = r'--oem 3 --psm 6 -l ita'
-            text = pytesseract.image_to_string(image, config=custom_config)
-            
-            # Processa il testo estratto
-            return self._parse_ocr_text(text)
-            
-        except Exception as e:
-            logger.error(f"Errore OCR: {e}")
-            return []
+        """Processa foto con OCR - DEPRECATO: ora gestito dal processor"""
+        logger.warning("_process_photo_ocr chiamato ma l'elaborazione è ora gestita dal processor")
+        return []
     
     def _parse_ocr_text(self, text: str) -> List[Dict[str, Any]]:
         """Parsa il testo estratto dall'OCR"""

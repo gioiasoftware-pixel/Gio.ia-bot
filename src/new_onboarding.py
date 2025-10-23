@@ -384,7 +384,10 @@ class NewOnboardingManager:
         
         try:
             # URL del microservizio processor
-            processor_url = os.getenv("PROCESSOR_URL", "http://localhost:8001")
+            from .config import PROCESSOR_URL
+            processor_url = PROCESSOR_URL
+            
+            logger.info(f"🔗 Invio inventario al processor: {processor_url}")
             
             # Prepara i dati per l'elaborazione
             if 'inventory_file' in context.user_data:
@@ -408,6 +411,8 @@ class NewOnboardingManager:
                 return
             
             # Invia al microservizio processor
+            logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}")
+            
             async with aiohttp.ClientSession() as session:
                 data = aiohttp.FormData()
                 data.add_field('telegram_id', str(telegram_id))
@@ -415,10 +420,13 @@ class NewOnboardingManager:
                 data.add_field('file_type', file_type)
                 data.add_field('file', file_content, filename=file_data.get('file_name', 'inventario'))
                 
+                logger.info(f"🌐 Chiamata HTTP POST a: {processor_url}/process-inventory")
                 async with session.post(f"{processor_url}/process-inventory", data=data) as response:
+                    logger.info(f"📊 Risposta processor: status={response.status}")
+                    
                     if response.status == 200:
                         result = await response.json()
-                        logger.info(f"Inventario elaborato: {result.get('total_wines', 0)} vini")
+                        logger.info(f"✅ Inventario elaborato: {result.get('total_wines', 0)} vini")
                         
                         # Notifica completamento all'utente
                         await update.message.reply_text(
@@ -429,9 +437,12 @@ class NewOnboardingManager:
                         )
                     else:
                         error_text = await response.text()
-                        logger.error(f"Errore processor: {response.status} - {error_text}")
+                        logger.error(f"❌ Errore processor: {response.status} - {error_text}")
                         await update.message.reply_text(
-                            "⚠️ Errore durante l'elaborazione dell'inventario. Riprova più tardi."
+                            f"⚠️ **Errore elaborazione inventario**\n\n"
+                            f"Status: {response.status}\n"
+                            f"Dettagli: {error_text[:200]}...\n\n"
+                            f"Riprova più tardi o contatta il supporto."
                         )
                         
         except Exception as e:

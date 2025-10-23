@@ -1,254 +1,185 @@
-# Gio.ia-bot 🤖
+# Gio.ia Bot - Assistente AI per Gestione Inventario Vini
 
-**Bot Telegram intelligente con AI per la gestione inventario vini**
+Un bot Telegram intelligente per la gestione dell'inventario di vini con AI conversazionale.
 
-Un assistente AI completo che gestisce inventario, movimenti, backup e report per ristoranti ed enoteche.
+## 🚀 Funzionalità
 
----
+- **AI Conversazionale** - Chat intelligente con GPT-3.5-turbo
+- **Gestione Inventario** - Tracking vini in tempo reale
+- **Movimenti** - Registrazione vendite e rifornimenti
+- **Alert Scorte** - Notifiche automatiche per scorte basse
+- **Backup** - Salvataggio periodico inventario
+- **Report** - Statistiche e analisi consumi
+- **Onboarding AI** - Setup guidato dall'AI
 
-## ✨ **FUNZIONALITÀ PRINCIPALI**
+## 📋 Comandi Principali
 
-### 🤖 **AI Conversazionale**
-- **Chat naturale** - Risponde a qualsiasi messaggio
-- **Contesto intelligente** - Conosce il tuo inventario e movimenti
-- **Consigli personalizzati** - Suggerimenti basati sui tuoi dati
+- `/start` - Avvia il bot
+- `/help` - Mostra comandi disponibili
+- `/inventario` - Visualizza inventario completo
+- `/log` - Mostra movimenti recenti
+- `/backup` - Crea backup inventario
+- `/stats` - Statistiche e report
 
-### 📋 **Onboarding Completo**
-- **Upload inventario** - CSV, Excel o foto con OCR
-- **Configurazione profilo** - Nome utente e locale
-- **Backup automatico** - Inventario iniziale salvato
+## 🔧 Setup
 
-### 📦 **Gestione Inventario**
-- **Movimenti automatici** - Riconosce consumi e rifornimenti
-- **Log completo** - Storico di tutti i movimenti
-- **Alert scorte basse** - Notifiche automatiche
-- **Backup periodici** - Sicurezza dei dati
+### Prerequisiti
+- Python 3.8+
+- PostgreSQL
+- Token Telegram Bot
+- OpenAI API Key
+- **Gioia Processor** (microservizio separato)
 
-### 📊 **Report e Analisi**
-- **Report giornalieri** - Riassunto movimenti
-- **Statistiche vendite** - Top vini venduti
-- **Analisi consumi** - Trend e pattern
-- **Export dati** - Per analisi esterne
-
----
-
-## 🚀 **INSTALLAZIONE RAPIDA**
-
-### **1. Clona il repository**
+### Installazione
 ```bash
 git clone https://github.com/gioiasoftware-pixel/Gio.ia-bot.git
 cd Gio.ia-bot
-```
-
-### **2. Configura ambiente**
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-### **3. Configura variabili**
-Modifica `.env` con i tuoi token:
+### Configurazione
+Copia `.env.example` in `.env` e configura:
 ```env
-TELEGRAM_BOT_TOKEN=il_tuo_token_telegram
-OPENAI_API_KEY=la_tua_chiave_openai
+TELEGRAM_BOT_TOKEN=your_bot_token
+OPENAI_API_KEY=your_openai_key
+DATABASE_URL=postgresql://user:pass@host:port/db
+PROCESSOR_URL=https://your-processor.railway.app
 ```
 
-### **4. Avvia il bot**
+**Nota**: `PROCESSOR_URL` deve puntare al microservizio Gioia Processor deployato su Railway.
+
+### Avvio
 ```bash
 python -m src.bot
 ```
 
----
+## 🧪 Test Integrazione
 
-## 🎯 **COME USARE IL BOT**
+### **Comandi di Test**
+- `/testai` - Test connessione OpenAI API
+- `/testprocessor` - Test connessione microservizio processor
 
-### **Primo Avvio**
-1. Scrivi `/start` al bot
-2. Carica il tuo inventario (CSV/Excel/Foto)
-3. Inserisci nome utente e locale
-4. Il sistema crea backup automatico
-
-### **Gestione Quotidiana**
-**Comunica movimenti naturalmente:**
-- "Ho venduto 2 bottiglie di Chianti"
-- "Ho ricevuto 10 bottiglie di Barolo"
-- "Ho consumato 1 Prosecco"
-
-**Chiedi informazioni:**
-- "Come va l'inventario?"
-- "Quali vini devo riordinare?"
-- "Fammi un report delle vendite"
-
-### **Comandi Disponibili**
-- `/start` - Avvia o mostra profilo
-- `/help` - Guida completa
-- `/inventario` - Visualizza inventario
-- `/log` - Mostra movimenti
-- `/scorte` - Alert scorte basse
-- `/aggiungi` - Aggiungi nuovo vino
-- `/upload` - Carica file inventario
-
----
-
-## 🏗️ **ARCHITETTURA TECNICA**
-
-### **Stack Tecnologico**
-- **Python 3.12** - Linguaggio principale
-- **python-telegram-bot** - API Telegram
-- **OpenAI GPT-3.5-turbo** - AI conversazionale
-- **PostgreSQL** - Database persistente
-- **SQLAlchemy** - ORM database
-- **FastAPI** - Microservizio elaborazione
-- **Railway.app** - Hosting e deploy
-
-### **Architettura Microservizi**
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Bot Telegram  │───▶│  Processor API  │───▶│   PostgreSQL    │
-│   (Port 8000)   │    │   (Port 8001)    │    │   Database      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
-
-### **Struttura Database**
-```sql
-users              -- Dati utenti
-├── wines          -- Inventario vini
-├── inventory_backups -- Backup inventario
-└── inventory_logs    -- Log movimenti
-```
-
-### **Moduli Principali**
-**Bot Telegram (`src/`):**
-- `bot.py` - Handler Telegram e routing
-- `ai.py` - Integrazione OpenAI con contesto
-- `database.py` - Gestione PostgreSQL
-- `new_onboarding.py` - Flusso registrazione AI
-- `inventory_movements.py` - Gestione movimenti
-
-**Processor API (`processor/`):**
-- `main.py` - API REST FastAPI
-- `ocr_processor.py` - OCR per foto
-- `csv_processor.py` - Parser CSV/Excel
-- `database.py` - Connessione database
-
----
-
-## 🚀 **DEPLOY SU RAILWAY**
-
-### **Setup Automatico**
-1. **Connetti GitHub** a Railway
-2. **Aggiungi PostgreSQL** service
-3. **Configura variabili ambiente:**
-   - `TELEGRAM_BOT_TOKEN`
-   - `OPENAI_API_KEY`
-   - `DATABASE_URL` (automatico)
-
-### **Deploy**
+### **Verifica Configurazione**
 ```bash
-git push origin main
+# Test locale processor
+curl http://localhost:8001/health
+
+# Test bot-processor
+curl -X POST http://localhost:8001/process-inventory \
+  -F "telegram_id=123456" \
+  -F "business_name=Test" \
+  -F "file_type=csv" \
+  -F "file=@test.csv"
 ```
-Railway fa deploy automatico!
+
+## 🏗️ Architettura Microservizi
+
+```
+┌─────────────────┐    HTTP    ┌─────────────────┐
+│   TELEGRAM BOT  │ ────────► │   PROCESSOR     │
+│   (Porta 8000)  │           │   (Porta 8001)  │
+│   python-telegram-bot │     │   FastAPI       │
+└─────────────────┘           └─────────────────┘
+        │                              │
+        ▼                              ▼
+┌─────────────────┐           ┌─────────────────┐
+│   PostgreSQL    │           │   PostgreSQL    │
+│   (Database)    │           │   (Database)    │
+└─────────────────┘           └─────────────────┘
+```
+
+### **Comunicazione Bot ↔ Processor**
+1. **Bot** riceve file inventario da utente
+2. **Bot** invia file al processor via `POST /process-inventory`
+3. **Processor** elabora file e salva nel database
+4. **Processor** restituisce conferma al bot
+5. **Bot** notifica utente del completamento
+
+## 🌐 Deploy
+
+### Railway
+1. Connetti repository GitHub
+2. Configura variabili ambiente
+3. Deploy automatico
+
+### Docker
+```bash
+docker build -t gioia-bot .
+docker run -p 8000:8000 gioia-bot
+```
+
+## 📊 Architettura
+
+```
+┌─────────────────┐    HTTP    ┌─────────────────┐
+│   FRONT (Bot)   │ ────────► │   PROCESSOR     │
+│   Porta: 8000   │           │   Porta: 8001   │
+│   Telegram API  │           │   FastAPI       │
+└─────────────────┘           └─────────────────┘
+         │                              │
+         ▼                              ▼
+┌─────────────────┐           ┌─────────────────┐
+│   PostgreSQL    │           │   PostgreSQL    │
+│   (Database)    │           │   (Database)    │
+└─────────────────┘           └─────────────────┘
+```
+
+**Nota:** Il processor è un microservizio separato con repository dedicato.
+
+## 🧠 AI Features
+
+- **Conversazione Naturale** - Chat fluida in italiano
+- **Analisi Inventario** - Suggerimenti intelligenti
+- **Rilevamento Pattern** - Identifica trend di consumo
+- **Consigli Proattivi** - Suggerimenti per riordini
+- **Onboarding Guidato** - Setup assistito dall'AI
+
+## 📈 Stack Tecnologico
+
+- **Backend:** Python, FastAPI, SQLAlchemy
+- **Database:** PostgreSQL
+- **AI:** OpenAI GPT-3.5-turbo
+- **Bot:** python-telegram-bot
+- **Deploy:** Railway
+- **Architettura:** Microservizi
+
+## 🔗 Moduli Principali
+
+- `src/bot.py` - Handler principale Telegram
+- `src/ai.py` - Integrazione OpenAI
+- `src/database.py` - Gestione database
+- `src/onboarding.py` - Processo setup utente
+- `src/new_onboarding.py` - Onboarding AI-guidato
+- `src/file_upload.py` - Gestione upload file
+
+**Nota:** Il microservizio processor è in un repository separato.
+
+## 🚀 Roadmap
+
+- [x] Bot Telegram base
+- [x] Integrazione AI
+- [x] Database PostgreSQL
+- [x] Gestione inventario
+- [x] Sistema movimenti
+- [x] Alert scorte
+- [x] Backup automatico
+- [x] Onboarding AI
+- [x] Architettura microservizi
+- [ ] Dashboard web
+- [ ] API REST completa
+- [ ] Integrazione POS
+- [ ] Analytics avanzate
+
+## 📞 Supporto
+
+Per supporto tecnico o domande:
+- **GitHub Issues:** [Issues](https://github.com/gioiasoftware-pixel/Gio.ia-bot/issues)
+- **Email:** support@gioiasoftware.com
+
+## 📄 Licenza
+
+MIT License - Vedi [LICENSE](LICENSE) per dettagli.
 
 ---
 
-## 💰 **COSTI OPERATIVI**
-
-### **OpenAI API**
-- **Costo per messaggio:** ~$0.0001
-- **100 messaggi/giorno:** ~$0.30/mese
-- **1000 messaggi/giorno:** ~$3.00/mese
-
-### **Railway**
-- **Piano gratuito:** 500 ore/mese
-- **PostgreSQL:** Incluso nel piano
-
----
-
-## 🔧 **SVILUPPO**
-
-### **Struttura Progetto**
-```
-src/
-├── bot.py              # Handler principale
-├── ai.py               # Integrazione OpenAI
-├── database.py         # Modelli e gestione DB
-├── new_onboarding.py   # Flusso registrazione
-├── inventory_movements.py # Gestione movimenti
-├── file_upload.py      # Upload e OCR
-├── inventory.py        # Gestione inventario
-└── config.py           # Configurazione
-```
-
-### **Aggiungere Funzionalità**
-1. **Crea nuovo modulo** in `src/`
-2. **Aggiungi handler** in `bot.py`
-3. **Testa localmente**
-4. **Deploy su Railway**
-
----
-
-## 📱 **ESEMPI CONVERSAZIONE**
-
-### **Onboarding**
-```
-Utente: /start
-Bot: 📤 Benvenuto! Carica il tuo inventario iniziale...
-
-Utente: [carica file CSV]
-Bot: ✅ File caricato! 45 vini estratti. Nome utente?
-
-Utente: Mario
-Bot: 👤 Perfetto Mario! Nome del locale?
-
-Utente: Ristorante da Mario
-Bot: 🎉 Onboarding completato! Sistema pronto!
-```
-
-### **Gestione Movimenti**
-```
-Utente: Ho venduto 2 bottiglie di Chianti
-Bot: ✅ Consumo registrato
-     🍷 Chianti - 15 → 13 bottiglie
-     📉 Consumate: 2 bottiglie
-
-Utente: Come va l'inventario?
-Bot: 📊 Inventario: 45 vini, 120 bottiglie totali
-     ⚠️ 3 vini con scorte basse
-     📈 Vendite oggi: 8 bottiglie
-```
-
----
-
-## 🆘 **SUPPORTO**
-
-### **Problemi Comuni**
-- **Bot non risponde:** Verifica token Telegram
-- **Errore AI:** Controlla credito OpenAI
-- **Database error:** Verifica connessione PostgreSQL
-
-### **Log e Debug**
-- **Railway logs:** Dashboard → Deployments → Logs
-- **Errori AI:** Logs mostrano errore specifico
-- **Database:** Verifica `DATABASE_URL`
-
----
-
-## 📄 **LICENZA**
-
-MIT License - Vedi file `LICENSE` per dettagli.
-
----
-
-## 🤝 **CONTRIBUTI**
-
-1. Fork del repository
-2. Crea feature branch
-3. Commit delle modifiche
-4. Push al branch
-5. Apri Pull Request
-
----
-
-**Sviluppato con ❤️ per la gestione intelligente dell'inventario vini**
+**Gio.ia Bot** - Trasforma la gestione del tuo inventario vini con l'AI! 🍷🤖
