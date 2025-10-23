@@ -141,7 +141,7 @@ async def chat_handler(update, context):
             return
         
         # Gestisci onboarding guidato dall'AI
-        if new_onboarding_manager.handle_ai_guided_response(update, context):
+        if await new_onboarding_manager.handle_ai_guided_response(update, context):
             return
         
         # Gestisci movimenti inventario
@@ -217,6 +217,9 @@ async def handle_document_with_onboarding(update, context):
         new_onboarding_manager.handle_file_upload_during_onboarding(
             update, context, file_type, file_bytes
         )
+    elif context.user_data.get('onboarding_step') == 'ai_guided':
+        # Gestisci durante onboarding AI
+        await new_onboarding_manager.handle_ai_guided_response(update, context)
     else:
         # Gestisci upload normale
         file_upload_manager.handle_document(update, context)
@@ -238,6 +241,9 @@ async def handle_photo_with_onboarding(update, context):
         new_onboarding_manager.handle_file_upload_during_onboarding(
             update, context, 'photo', file_bytes
         )
+    elif context.user_data.get('onboarding_step') == 'ai_guided':
+        # Gestisci durante onboarding AI
+        await new_onboarding_manager.handle_ai_guided_response(update, context)
     else:
         # Gestisci upload normale
         file_upload_manager.handle_photo(update, context)

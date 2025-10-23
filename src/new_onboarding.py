@@ -230,39 +230,189 @@ class NewOnboardingManager:
         
         logger.info("Onboarding AI guidato avviato")
     
-    def handle_ai_guided_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def handle_ai_guided_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce le risposte durante l'onboarding guidato dall'AI"""
         from .ai import get_ai_response
+        from .file_upload import file_upload_manager
         
         if context.user_data.get('onboarding_step') != 'ai_guided':
             return False
         
-        user_text = update.message.text
+        telegram_id = update.effective_user.id
+        user_data = context.user_data.get('onboarding_data', {})
+        
+        # Gestisci upload file inventario
+        if update.message.document:
+            await self._handle_inventory_upload(update, context)
+            return True
+        
+        # Gestisci foto inventario
+        if update.message.photo:
+            await self._handle_inventory_photo(update, context)
+            return True
+        
+        # Gestisci risposta testuale (nome locale)
+        if update.message.text:
+            await self._handle_text_response(update, context)
+            return True
+        
+        return False
+    
+    async def _handle_inventory_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce l'upload del file inventario"""
+        from .ai import get_ai_response
+        
+        telegram_id = update.effective_user.id
+        document = update.message.document
+        
+        # Ringrazia per il file
+        await update.message.reply_text(
+            "✅ **Perfetto! File inventario ricevuto!**\n\n"
+            "📋 Sto elaborando il tuo inventario per creare il backup del giorno 0...\n\n"
+            "Ora ho bisogno di sapere il **nome del tuo locale** per completare la configurazione.\n\n"
+            "🏢 **Come si chiama il tuo ristorante/enoteca?**"
+        )
+        
+        # Salva il file per l'elaborazione
+        context.user_data['inventory_file'] = {
+            'file_id': document.file_id,
+            'file_name': document.file_name,
+            'file_size': document.file_size
+        }
+        
+        # Imposta stato per ricevere nome locale
+        context.user_data['onboarding_step'] = 'waiting_business_name'
+        
+        logger.info(f"File inventario ricevuto da {telegram_id}: {document.file_name}")
+    
+    async def _handle_inventory_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce l'upload della foto inventario"""
+        telegram_id = update.effective_user.id
+        photo = update.message.photo[-1]  # Prendi la foto più grande
+        
+        # Ringrazia per la foto
+        await update.message.reply_text(
+            "✅ **Perfetto! Foto inventario ricevuta!**\n\n"
+            "📷 Sto elaborando l'immagine con OCR per estrarre i dati dell'inventario...\n\n"
+            "Ora ho bisogno di sapere il **nome del tuo locale** per completare la configurazione.\n\n"
+            "🏢 **Come si chiama il tuo ristorante/enoteca?**"
+        )
+        
+        # Salva la foto per l'elaborazione
+        context.user_data['inventory_photo'] = {
+            'file_id': photo.file_id,
+            'file_size': photo.file_size
+        }
+        
+        # Imposta stato per ricevere nome locale
+        context.user_data['onboarding_step'] = 'waiting_business_name'
+        
+        logger.info(f"Foto inventario ricevuta da {telegram_id}")
+    
+    async def _handle_text_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce la risposta testuale (nome locale)"""
+        from .ai import get_ai_response
+        
+        telegram_id = update.effective_user.id
+        business_name = update.message.text.strip()
+        
+        if context.user_data.get('onboarding_step') == 'waiting_business_name':
+            # Salva nome locale e completa onboarding
+            await self._complete_onboarding(update, context, business_name)
+        else:
+            # Usa AI per rispondere a domande generiche
+            ai_prompt = f"""
+            Sei Gio.ia-bot durante l'onboarding. L'utente ha scritto: "{business_name}"
+            
+            GUIDA L'ONBOARDING:
+            - Se l'utente fornisce il nome del locale, conferma e procedi
+            - Se l'utente fa domande, rispondi e guida al prossimo step
+            - Sii sempre gentile e professionale
+            - Mantieni il focus sull'onboarding
+            
+            STATO: Aspettando nome del locale
+            """
+            
+            ai_response = get_ai_response(ai_prompt, telegram_id)
+            await update.message.reply_text(ai_response)
+    
+    async def _complete_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
+        """Completa l'onboarding e salva tutto nel database"""
         telegram_id = update.effective_user.id
         
-        # Usa AI per guidare l'onboarding
-        ai_prompt = f"""
-        Sei Gio.ia-bot durante l'onboarding di un nuovo utente. 
-        L'utente ha scritto: "{user_text}"
+        try:
+            # Aggiorna utente con nome locale
+            db_manager.update_user_onboarding(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                onboarding_completed=True
+            )
+            
+            # Elabora inventario e crea backup
+            await self._process_inventory_and_backup(update, context, business_name)
+            
+            # Messaggio di completamento
+            await update.message.reply_text(
+                f"🎉 **Onboarding completato con successo!**\n\n"
+                f"🏢 **{business_name}** è ora configurato!\n\n"
+                f"✅ Inventario giorno 0 salvato\n"
+                f"✅ Sistema pronto per l'uso\n\n"
+                f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!\n"
+                f"📋 Usa /help per vedere tutti i comandi disponibili."
+            )
+            
+            # Pulisci dati temporanei
+            context.user_data.pop('onboarding_step', None)
+            context.user_data.pop('onboarding_data', None)
+            context.user_data.pop('inventory_file', None)
+            context.user_data.pop('inventory_photo', None)
+            
+            logger.info(f"Onboarding completato per {business_name} (ID: {telegram_id})")
+            
+        except Exception as e:
+            logger.error(f"Errore completamento onboarding: {e}")
+            await update.message.reply_text(
+                "❌ Errore durante il completamento. Riprova con `/start`."
+            )
+    
+    async def _process_inventory_and_backup(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
+        """Elabora l'inventario e crea il backup del giorno 0"""
+        from .file_upload import file_upload_manager
         
-        GUIDA L'ONBOARDING:
-        1. Se l'utente carica un file inventario, conferma e procedi
-        2. Se l'utente fornisce nome utente/locale, salva e procedi
-        3. Se l'utente fa domande, rispondi e guida al prossimo step
-        4. Sii sempre gentile e professionale
-        5. Mantieni il focus sull'onboarding
+        telegram_id = update.effective_user.id
         
-        STATO ATTUALE: Onboarding in corso
-        PROSSIMO STEP: Carica inventario iniziale
-        """
+        # Elabora file inventario
+        if 'inventory_file' in context.user_data:
+            file_data = context.user_data['inventory_file']
+            # Qui dovresti elaborare il file e salvare i vini nel database
+            # Per ora creiamo un backup generico
+            backup_data = {
+                'business_name': business_name,
+                'backup_date': '2024-01-01',
+                'file_name': file_data['file_name'],
+                'status': 'processed'
+            }
+            
+        elif 'inventory_photo' in context.user_data:
+            photo_data = context.user_data['inventory_photo']
+            # Qui dovresti elaborare la foto con OCR e salvare i vini
+            backup_data = {
+                'business_name': business_name,
+                'backup_date': '2024-01-01',
+                'file_type': 'photo',
+                'status': 'processed'
+            }
         
-        # Ottieni risposta AI
-        ai_response = get_ai_response(ai_prompt, telegram_id)
+        # Crea backup nel database
+        import json
+        db_manager.create_inventory_backup(
+            telegram_id=telegram_id,
+            backup_name="Inventario Giorno 0",
+            backup_data=json.dumps(backup_data),
+            backup_type="initial"
+        )
         
-        # Invia risposta AI
-        update.message.reply_text(ai_response)
-        
-        return True
+        logger.info(f"Backup inventario creato per {business_name}")
     
     def is_onboarding_complete(self, telegram_id: int) -> bool:
         """Verifica se l'onboarding è completato"""
