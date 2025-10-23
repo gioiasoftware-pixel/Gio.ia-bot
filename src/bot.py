@@ -78,32 +78,33 @@ async def testai_cmd(update, context):
 
 async def testprocessor_cmd(update, context):
     """Test connessione processor"""
-    import aiohttp
-    from .config import PROCESSOR_URL
+    from .processor_client import processor_client
     
     await update.message.reply_text("🔗 Test connessione processor...")
     
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{PROCESSOR_URL}/health") as response:
-                if response.status == 200:
-                    result = await response.json()
-                    await update.message.reply_text(
-                        f"✅ **Processor connesso!**\n\n"
-                        f"URL: {PROCESSOR_URL}\n"
-                        f"Status: {result.get('status', 'unknown')}\n"
-                        f"Service: {result.get('service', 'unknown')}"
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ **Processor non raggiungibile**\n\n"
-                        f"URL: {PROCESSOR_URL}\n"
-                        f"Status: {response.status}"
-                    )
+        result = await processor_client.health_check()
+        
+        if result.get('status') == 'healthy':
+            await update.message.reply_text(
+                f"✅ **Processor connesso!**\n\n"
+                f"URL: {processor_client.base_url}\n"
+                f"Status: {result.get('status', 'unknown')}\n"
+                f"Service: {result.get('service', 'unknown')}\n"
+                f"AI Enabled: {result.get('ai_enabled', 'unknown')}\n"
+                f"Database: {result.get('database_status', 'unknown')}"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ **Processor non raggiungibile**\n\n"
+                f"URL: {processor_client.base_url}\n"
+                f"Status: {result.get('status', 'unknown')}\n"
+                f"Error: {result.get('error', 'Unknown error')}"
+            )
     except Exception as e:
         await update.message.reply_text(
             f"❌ **Errore connessione processor**\n\n"
-            f"URL: {PROCESSOR_URL}\n"
+            f"URL: {processor_client.base_url}\n"
             f"Errore: {str(e)}"
         )
 

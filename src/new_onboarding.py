@@ -97,33 +97,14 @@ class NewOnboardingManager:
             return False
         
         try:
-            # Processa il file
-            if file_type == 'csv':
-                wines_data = file_upload_manager._process_csv(file_data)
-            elif file_type == 'excel':
-                wines_data = file_upload_manager._process_excel(file_data)
-            elif file_type == 'photo':
-                wines_data = file_upload_manager._process_photo_ocr(file_data)
-            else:
-                return False
-            
-            if not wines_data:
-                update.message.reply_text(
-                    "❌ **Errore nel file**\n\n"
-                    "Il file non contiene dati validi o l'intestazione non è corretta.\n"
-                    "Riprova con un file valido."
-                )
-                return True
-            
-            # Salva i dati temporaneamente
-            context.user_data['uploaded_wines'] = wines_data
+            # Salva i dati temporaneamente per l'onboarding
+            context.user_data['uploaded_wines'] = []  # Dati vuoti, elaborazione nel processor
             context.user_data['onboarding_data'] = context.user_data.get('onboarding_data', {})
             
             # Conferma upload
             success_message = (
                 f"✅ **File caricato con successo!**\n\n"
-                f"📊 **Risultati:**\n"
-                f"• Vini estratti: {len(wines_data)}\n"
+                f"📊 **File ricevuto:** {file_type.upper()}\n"
                 f"• File processato correttamente\n\n"
                 f"🎯 **Prossimo step:** Configurazione profilo utente"
             )
@@ -161,31 +142,16 @@ class NewOnboardingManager:
                 update.message.reply_text("❌ Errore durante il salvataggio. Riprova con `/start`.")
                 return
             
-            # Salva i vini nel database
-            saved_count = 0
-            for wine_data in uploaded_wines:
-                try:
-                    wine = db_manager.add_wine(telegram_id, wine_data)
-                    if wine:
-                        saved_count += 1
-                except Exception as e:
-                    logger.error(f"Errore salvataggio vino: {e}")
-            
-            # Crea backup dell'inventario iniziale
-            backup_data = json.dumps(uploaded_wines, ensure_ascii=False, indent=2)
-            db_manager.create_inventory_backup(
-                telegram_id=telegram_id,
-                backup_name="Inventario Iniziale",
-                backup_data=backup_data,
-                backup_type="initial"
-            )
+            # I vini sono già stati salvati dal processor
+            # Non serve salvarli di nuovo qui
+            saved_count = 0  # Il processor ha già salvato tutto
             
             # Messaggio di completamento
             completion_text = (
                 f"🎉 **Onboarding completato con successo!**\n\n"
                 f"👤 **Utente:** {onboarding_data.get('username', 'N/A')}\n"
                 f"🏢 **Locale:** {onboarding_data.get('restaurant_name', 'N/A')}\n"
-                f"📦 **Inventario:** {saved_count} vini caricati\n"
+                f"📦 **Inventario:** Elaborato e salvato dal sistema\n"
                 f"💾 **Backup:** Inventario iniziale salvato\n\n"
                 f"🚀 **Il tuo sistema è pronto!**\n\n"
                 f"📋 **Come usare il bot:**\n"
@@ -202,6 +168,8 @@ class NewOnboardingManager:
             context.user_data.pop('onboarding_step', None)
             context.user_data.pop('onboarding_data', None)
             context.user_data.pop('uploaded_wines', None)
+            context.user_data.pop('inventory_file', None)
+            context.user_data.pop('inventory_photo', None)
             
             logger.info(f"Onboarding completato per utente {telegram_id}")
             
@@ -377,18 +345,11 @@ class NewOnboardingManager:
     
     async def _process_inventory_and_backup(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
         """Elabora l'inventario e crea il backup del giorno 0"""
-        import aiohttp
-        import asyncio
+        from .processor_client import processor_client
         
         telegram_id = update.effective_user.id
         
         try:
-            # URL del microservizio processor
-            from .config import PROCESSOR_URL
-            processor_url = PROCESSOR_URL
-            
-            logger.info(f"🔗 Invio inventario al processor: {processor_url}")
-            
             # Prepara i dati per l'elaborazione
             if 'inventory_file' in context.user_data:
                 file_data = context.user_data['inventory_file']
@@ -397,6 +358,7 @@ class NewOnboardingManager:
                 # Scarica il file dal Telegram
                 file_obj = await context.bot.get_file(file_data['file_id'])
                 file_content = await file_obj.download_as_bytearray()
+                file_name = file_data['file_name']
                 
             elif 'inventory_photo' in context.user_data:
                 photo_data = context.user_data['inventory_photo']
@@ -405,6 +367,7 @@ class NewOnboardingManager:
                 # Scarica la foto dal Telegram
                 file_obj = await context.bot.get_file(photo_data['file_id'])
                 file_content = await file_obj.download_as_bytearray()
+                file_name = 'inventario.jpg'
                 
             else:
                 logger.error("Nessun file inventario trovato")
@@ -413,37 +376,32 @@ class NewOnboardingManager:
             # Invia al microservizio processor
             logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}")
             
-            async with aiohttp.ClientSession() as session:
-                data = aiohttp.FormData()
-                data.add_field('telegram_id', str(telegram_id))
-                data.add_field('business_name', business_name)
-                data.add_field('file_type', file_type)
-                data.add_field('file', file_content, filename=file_data.get('file_name', 'inventario'))
+            result = await processor_client.process_inventory(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                file_type=file_type,
+                file_content=file_content,
+                file_name=file_name
+            )
+            
+            if result.get('status') == 'success':
+                logger.info(f"✅ Inventario elaborato: {result.get('total_wines', 0)} vini")
                 
-                logger.info(f"🌐 Chiamata HTTP POST a: {processor_url}/process-inventory")
-                async with session.post(f"{processor_url}/process-inventory", data=data) as response:
-                    logger.info(f"📊 Risposta processor: status={response.status}")
-                    
-                    if response.status == 200:
-                        result = await response.json()
-                        logger.info(f"✅ Inventario elaborato: {result.get('total_wines', 0)} vini")
-                        
-                        # Notifica completamento all'utente
-                        await update.message.reply_text(
-                            f"🎉 **Elaborazione completata!**\n\n"
-                            f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
-                            f"🏢 **{business_name}** configurato con successo\n\n"
-                            f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
-                        )
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Errore processor: {response.status} - {error_text}")
-                        await update.message.reply_text(
-                            f"⚠️ **Errore elaborazione inventario**\n\n"
-                            f"Status: {response.status}\n"
-                            f"Dettagli: {error_text[:200]}...\n\n"
-                            f"Riprova più tardi o contatta il supporto."
-                        )
+                # Notifica completamento all'utente
+                await update.message.reply_text(
+                    f"🎉 **Elaborazione completata!**\n\n"
+                    f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
+                    f"🏢 **{business_name}** configurato con successo\n\n"
+                    f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
+                )
+            else:
+                error_msg = result.get('error', 'Errore sconosciuto')
+                logger.error(f"❌ Errore processor: {error_msg}")
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione inventario**\n\n"
+                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Riprova più tardi o contatta il supporto."
+                )
                         
         except Exception as e:
             logger.error(f"Errore elaborazione inventario: {e}")

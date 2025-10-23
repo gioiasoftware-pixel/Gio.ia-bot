@@ -458,6 +458,190 @@ python -c "from database import db; print('DB OK')"
 - [ ] Dati salvati nel database
 - [ ] Notifica utente ricevuta
 
+## 🔍 CHECK COMPLETO POST-DEPLOY
+
+### **STEP 1: Verifica Processor Attivo**
+```bash
+# Test endpoint base
+curl https://your-processor.railway.app/
+
+# Test health check
+curl https://your-processor.railway.app/health
+
+# Risposta attesa:
+# {"status": "healthy", "service": "gioia-processor"}
+```
+
+### **STEP 2: Controlla Logs Railway**
+1. **Railway Dashboard** → Progetto processor → Logs
+2. **Cerca errori**:
+   - `ModuleNotFoundError`
+   - `Database connection failed`
+   - `Port binding error`
+   - `Import error`
+
+### **STEP 3: Verifica Database**
+```bash
+# Test connessione database
+# Nel processor, verifica che DATABASE_URL sia configurato
+echo $DATABASE_URL
+
+# Dovrebbe restituire URL PostgreSQL completo
+```
+
+### **STEP 4: Test Endpoint Processor**
+```bash
+# Test processamento (esempio)
+curl -X POST https://your-processor.railway.app/process-inventory \
+  -F "telegram_id=123456" \
+  -F "business_name=Test Restaurant" \
+  -F "file_type=csv" \
+  -F "file=@test.csv"
+
+# Risposta attesa:
+# {"status": "success", "total_wines": N, "business_name": "...", "telegram_id": ...}
+```
+
+### **STEP 5: Configurazione Bot**
+Nel bot principale, aggiungi variabile:
+```env
+PROCESSOR_URL=https://your-processor.railway.app
+```
+
+### **STEP 6: Test Integrazione Bot**
+1. **Nel bot Telegram**: `/testprocessor`
+2. **Dovrebbe restituire**:
+   ```
+   ✅ Processor connesso!
+   
+   URL: https://your-processor.railway.app
+   Status: healthy
+   Service: gioia-processor
+   ```
+
+## 🚨 TROUBLESHOOTING AVANZATO
+
+### **Errore 404 - Processor non raggiungibile**
+```bash
+# Possibili cause:
+1. Processor non deployato
+2. Endpoint /health non implementato
+3. Porta sbagliata
+4. Database non connesso
+
+# Soluzioni:
+1. Controlla logs Railway processor
+2. Verifica che main.py sia presente
+3. Controlla che start_processor.py esista
+4. Verifica DATABASE_URL configurato
+```
+
+### **Errore 500 - Internal Server Error**
+```bash
+# Possibili cause:
+1. Database non connesso
+2. Dipendenze mancanti
+3. Errori nel codice
+
+# Soluzioni:
+1. Controlla logs per errori specifici
+2. Verifica requirements.txt
+3. Testa connessione database
+4. Controlla sintassi codice
+```
+
+### **Errore Timeout**
+```bash
+# Possibili cause:
+1. Database lento
+2. OCR processing lungo
+3. File troppo grande
+
+# Soluzioni:
+1. Ottimizza query database
+2. Riduci dimensione file
+3. Aumenta timeout Railway
+```
+
+### **Errore Import/Dependencies**
+```bash
+# Possibili cause:
+1. requirements.txt mancante
+2. Versioni incompatibili
+3. Python version sbagliata
+
+# Soluzioni:
+1. Verifica requirements.txt
+2. Controlla Python version
+3. Aggiorna dipendenze
+```
+
+## 📊 MONITORAGGIO CONTINUO
+
+### **Metriche da Monitorare**
+- **Response Time**: < 5 secondi per /health
+- **Error Rate**: < 1% errori
+- **Memory Usage**: < 512MB
+- **CPU Usage**: < 50%
+
+### **Alert da Configurare**
+- **Health check failed** per > 1 minuto
+- **Error rate** > 5%
+- **Memory usage** > 80%
+- **Response time** > 10 secondi
+
+### **Logs da Monitorare**
+- **Database connections**
+- **API calls** al processor
+- **Error rates** per endpoint
+- **Performance metrics**
+
+## 🔧 CONFIGURAZIONE AVANZATA
+
+### **Variabili Ambiente Processor**
+```env
+# Obbligatorie
+DATABASE_URL=postgresql://user:pass@host:port/db
+PORT=8001
+
+# Opzionali
+PYTHON_VERSION=3.11
+LOG_LEVEL=INFO
+MAX_FILE_SIZE=10MB
+OCR_TIMEOUT=30
+```
+
+### **Configurazione Railway Avanzata**
+```json
+{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python start_processor.py",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 100,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
+```
+
+### **Test di Carico**
+```bash
+# Test multiple richieste
+for i in {1..10}; do
+  curl https://your-processor.railway.app/health
+done
+
+# Test file grandi
+curl -X POST https://your-processor.railway.app/process-inventory \
+  -F "telegram_id=123456" \
+  -F "business_name=Test" \
+  -F "file_type=csv" \
+  -F "file=@large_file.csv"
+```
+
 ---
 
 **Nota**: Questo microservizio è completamente separato dal bot Telegram e gestisce solo l'elaborazione dei file inventari.
