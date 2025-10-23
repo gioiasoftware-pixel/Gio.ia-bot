@@ -12,6 +12,8 @@ os.environ.pop('HTTP_PROXY', None)
 os.environ.pop('HTTPS_PROXY', None)
 os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
+os.environ.pop('ALL_PROXY', None)
+os.environ.pop('all_proxy', None)
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +117,15 @@ ESEMPI DI RISPOSTA:
         # Configura client OpenAI con parametri espliciti
         try:
             # Configurazione esplicita per evitare conflitti
-            client = OpenAI(
-                api_key=OPENAI_API_KEY
-            )
+            import openai
+            logger.info(f"OpenAI version: {openai.__version__}")
+            
+            # Crea client con configurazione minima
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
             logger.info("Client OpenAI creato con successo")
         except Exception as e:
             logger.error(f"Errore creazione client OpenAI: {e}")
+            logger.error(f"Tipo errore: {type(e).__name__}")
             return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
         # Chiamata API con gestione errori robusta
         try:
