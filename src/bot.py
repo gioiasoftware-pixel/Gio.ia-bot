@@ -140,6 +140,10 @@ async def chat_handler(update, context):
         if new_onboarding_manager.handle_onboarding_response(update, context):
             return
         
+        # Gestisci onboarding guidato dall'AI
+        if new_onboarding_manager.handle_ai_guided_response(update, context):
+            return
+        
         # Gestisci movimenti inventario
         if inventory_movement_manager.process_movement_message(update, context):
             return

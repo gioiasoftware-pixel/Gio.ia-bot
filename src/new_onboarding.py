@@ -32,11 +32,11 @@ class NewOnboardingManager:
         }
     
     def start_new_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Avvia il nuovo processo di onboarding"""
+        """Avvia il nuovo processo di onboarding guidato dall'AI"""
         user = update.effective_user
         telegram_id = user.id
         
-        logger.info(f"Nuovo onboarding avviato per: {user.username} (ID: {telegram_id})")
+        logger.info(f"Nuovo onboarding AI avviato per: {user.username} (ID: {telegram_id})")
         
         # Crea utente se non esiste
         existing_user = db_manager.get_user_by_telegram_id(telegram_id)
@@ -48,8 +48,8 @@ class NewOnboardingManager:
                 last_name=user.last_name
             )
         
-        # Inizia con l'upload del file
-        self._send_onboarding_step(update, context, 'upload_file')
+        # Avvia onboarding guidato dall'AI
+        self._start_ai_guided_onboarding(update, context)
     
     def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
         """Invia un step dell'onboarding"""
@@ -208,6 +208,61 @@ class NewOnboardingManager:
         except Exception as e:
             logger.error(f"Errore completamento onboarding: {e}")
             update.message.reply_text("❌ Errore durante il completamento. Riprova con `/start`.")
+    
+    def _start_ai_guided_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Avvia onboarding guidato dall'AI"""
+        from .ai import get_ai_response
+        
+        # Messaggio di benvenuto con AI
+        welcome_message = (
+            "🎉 **Benvenuto in Gio.ia-bot!**\n\n"
+            "Sono il tuo assistente AI per la gestione inventario vini. "
+            "Ti guiderò passo dopo passo per configurare il tuo sistema.\n\n"
+            "**Prima cosa importante:** Ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
+            "📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
+        )
+        
+        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        
+        # Imposta stato onboarding
+        context.user_data['onboarding_step'] = 'ai_guided'
+        context.user_data['onboarding_data'] = {}
+        
+        logger.info("Onboarding AI guidato avviato")
+    
+    def handle_ai_guided_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Gestisce le risposte durante l'onboarding guidato dall'AI"""
+        from .ai import get_ai_response
+        
+        if context.user_data.get('onboarding_step') != 'ai_guided':
+            return False
+        
+        user_text = update.message.text
+        telegram_id = update.effective_user.id
+        
+        # Usa AI per guidare l'onboarding
+        ai_prompt = f"""
+        Sei Gio.ia-bot durante l'onboarding di un nuovo utente. 
+        L'utente ha scritto: "{user_text}"
+        
+        GUIDA L'ONBOARDING:
+        1. Se l'utente carica un file inventario, conferma e procedi
+        2. Se l'utente fornisce nome utente/locale, salva e procedi
+        3. Se l'utente fa domande, rispondi e guida al prossimo step
+        4. Sii sempre gentile e professionale
+        5. Mantieni il focus sull'onboarding
+        
+        STATO ATTUALE: Onboarding in corso
+        PROSSIMO STEP: Carica inventario iniziale
+        """
+        
+        # Ottieni risposta AI
+        ai_response = get_ai_response(ai_prompt, telegram_id)
+        
+        # Invia risposta AI
+        update.message.reply_text(ai_response)
+        
+        return True
     
     def is_onboarding_complete(self, telegram_id: int) -> bool:
         """Verifica se l'onboarding è completato"""
