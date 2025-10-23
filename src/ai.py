@@ -1,8 +1,11 @@
 import logging
 import os
 from openai import OpenAI, OpenAIError
-from .config import OPENAI_API_KEY, OPENAI_MODEL
+from .config import OPENAI_MODEL
 from .database import db_manager
+
+# Carica direttamente la variabile ambiente
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Disabilita eventuali proxy automatici che potrebbero causare conflitti
 os.environ.pop('HTTP_PROXY', None)
@@ -15,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     """Genera risposta AI con accesso ai dati utente."""
-    logger.info(f"OpenAI API Key presente: {bool(OPENAI_API_KEY)}")
+    logger.info(f"=== DEBUG OPENAI ===")
+    logger.info(f"OPENAI_API_KEY presente: {bool(OPENAI_API_KEY)}")
+    logger.info(f"OPENAI_API_KEY valore: {OPENAI_API_KEY[:10] if OPENAI_API_KEY else 'None'}...")
+    logger.info(f"OPENAI_MODEL: {OPENAI_MODEL}")
+    
     if not OPENAI_API_KEY:
         logger.warning("OpenAI API key non configurata")
         return "⚠️ L'AI non è configurata. Contatta l'amministratore."
