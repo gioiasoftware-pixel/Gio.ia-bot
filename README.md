@@ -97,10 +97,19 @@ python -m src.bot
 ### **Stack Tecnologico**
 - **Python 3.12** - Linguaggio principale
 - **python-telegram-bot** - API Telegram
-- **OpenAI GPT-4o-mini** - AI conversazionale
+- **OpenAI GPT-3.5-turbo** - AI conversazionale
 - **PostgreSQL** - Database persistente
 - **SQLAlchemy** - ORM database
+- **FastAPI** - Microservizio elaborazione
 - **Railway.app** - Hosting e deploy
+
+### **Architettura Microservizi**
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Bot Telegram  │───▶│  Processor API  │───▶│   PostgreSQL    │
+│   (Port 8000)   │    │   (Port 8001)    │    │   Database      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
 ### **Struttura Database**
 ```sql
@@ -111,12 +120,18 @@ users              -- Dati utenti
 ```
 
 ### **Moduli Principali**
+**Bot Telegram (`src/`):**
 - `bot.py` - Handler Telegram e routing
 - `ai.py` - Integrazione OpenAI con contesto
 - `database.py` - Gestione PostgreSQL
-- `new_onboarding.py` - Flusso registrazione
+- `new_onboarding.py` - Flusso registrazione AI
 - `inventory_movements.py` - Gestione movimenti
-- `file_upload.py` - Upload e OCR
+
+**Processor API (`processor/`):**
+- `main.py` - API REST FastAPI
+- `ocr_processor.py` - OCR per foto
+- `csv_processor.py` - Parser CSV/Excel
+- `database.py` - Connessione database
 
 ---
 

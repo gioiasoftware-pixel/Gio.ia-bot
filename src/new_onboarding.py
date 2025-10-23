@@ -377,42 +377,68 @@ class NewOnboardingManager:
     
     async def _process_inventory_and_backup(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
         """Elabora l'inventario e crea il backup del giorno 0"""
-        from .file_upload import file_upload_manager
+        import aiohttp
+        import asyncio
         
         telegram_id = update.effective_user.id
         
-        # Elabora file inventario
-        if 'inventory_file' in context.user_data:
-            file_data = context.user_data['inventory_file']
-            # Qui dovresti elaborare il file e salvare i vini nel database
-            # Per ora creiamo un backup generico
-            backup_data = {
-                'business_name': business_name,
-                'backup_date': '2024-01-01',
-                'file_name': file_data['file_name'],
-                'status': 'processed'
-            }
+        try:
+            # URL del microservizio processor
+            processor_url = os.getenv("PROCESSOR_URL", "http://localhost:8001")
             
-        elif 'inventory_photo' in context.user_data:
-            photo_data = context.user_data['inventory_photo']
-            # Qui dovresti elaborare la foto con OCR e salvare i vini
-            backup_data = {
-                'business_name': business_name,
-                'backup_date': '2024-01-01',
-                'file_type': 'photo',
-                'status': 'processed'
-            }
-        
-        # Crea backup nel database
-        import json
-        db_manager.create_inventory_backup(
-            telegram_id=telegram_id,
-            backup_name="Inventario Giorno 0",
-            backup_data=json.dumps(backup_data),
-            backup_type="initial"
-        )
-        
-        logger.info(f"Backup inventario creato per {business_name}")
+            # Prepara i dati per l'elaborazione
+            if 'inventory_file' in context.user_data:
+                file_data = context.user_data['inventory_file']
+                file_type = 'csv' if file_data['file_name'].endswith('.csv') else 'excel'
+                
+                # Scarica il file dal Telegram
+                file_obj = await context.bot.get_file(file_data['file_id'])
+                file_content = await file_obj.download_as_bytearray()
+                
+            elif 'inventory_photo' in context.user_data:
+                photo_data = context.user_data['inventory_photo']
+                file_type = 'photo'
+                
+                # Scarica la foto dal Telegram
+                file_obj = await context.bot.get_file(photo_data['file_id'])
+                file_content = await file_obj.download_as_bytearray()
+                
+            else:
+                logger.error("Nessun file inventario trovato")
+                return
+            
+            # Invia al microservizio processor
+            async with aiohttp.ClientSession() as session:
+                data = aiohttp.FormData()
+                data.add_field('telegram_id', str(telegram_id))
+                data.add_field('business_name', business_name)
+                data.add_field('file_type', file_type)
+                data.add_field('file', file_content, filename=file_data.get('file_name', 'inventario'))
+                
+                async with session.post(f"{processor_url}/process-inventory", data=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Inventario elaborato: {result.get('total_wines', 0)} vini")
+                        
+                        # Notifica completamento all'utente
+                        await update.message.reply_text(
+                            f"🎉 **Elaborazione completata!**\n\n"
+                            f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
+                            f"🏢 **{business_name}** configurato con successo\n\n"
+                            f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
+                        )
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Errore processor: {response.status} - {error_text}")
+                        await update.message.reply_text(
+                            "⚠️ Errore durante l'elaborazione dell'inventario. Riprova più tardi."
+                        )
+                        
+        except Exception as e:
+            logger.error(f"Errore elaborazione inventario: {e}")
+            await update.message.reply_text(
+                "⚠️ Errore durante l'elaborazione. Riprova più tardi."
+            )
     
     def is_onboarding_complete(self, telegram_id: int) -> bool:
         """Verifica se l'onboarding è completato"""
