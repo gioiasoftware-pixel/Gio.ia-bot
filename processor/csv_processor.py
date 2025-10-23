@@ -4,8 +4,9 @@ Estrae dati vini da file CSV e Excel
 """
 import io
 import logging
-import pandas as pd
 from typing import List, Dict, Any
+from openpyxl import load_workbook
+import csv
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +33,13 @@ class CSVProcessor:
             
             # Leggi il file in base al tipo
             if file_type == 'csv':
-                df = pd.read_csv(io.BytesIO(file_content), encoding='utf-8')
+                wines = self._process_csv(file_content)
             elif file_type == 'excel':
-                df = pd.read_excel(io.BytesIO(file_content))
+                wines = self._process_excel(file_content)
             else:
                 raise ValueError(f"Tipo file non supportato: {file_type}")
             
-            self.logger.info(f"File letto: {len(df)} righe, {len(df.columns)} colonne")
-            
-            # Elabora i dati
-            wines = self._process_dataframe(df)
+            self.logger.info(f"File letto: {len(wines)} vini estratti")
             
             self.logger.info(f"Vini estratti: {len(wines)}")
             return wines
@@ -50,48 +48,121 @@ class CSVProcessor:
             self.logger.error(f"Errore elaborazione file: {e}")
             return []
     
-    def _process_dataframe(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """
-        Elabora il DataFrame per estrarre i vini
-        
-        Args:
-            df: DataFrame con i dati
-            
-        Returns:
-            Lista di vini estratti
-        """
+    def _process_csv(self, file_content: bytes) -> List[Dict[str, Any]]:
+        """Processa file CSV"""
         wines = []
+        csv_reader = csv.DictReader(io.StringIO(file_content.decode('utf-8')))
         
-        # Normalizza i nomi delle colonne
-        df.columns = df.columns.str.lower().str.strip()
-        
-        # Mappa delle colonne comuni
-        column_mapping = self._map_columns(df.columns)
-        
-        for index, row in df.iterrows():
-            try:
-                wine_data = self._extract_wine_from_row(row, column_mapping)
-                if wine_data:
-                    wines.append(wine_data)
-            except Exception as e:
-                self.logger.error(f"Errore elaborazione riga {index}: {e}")
-                continue
+        for row in csv_reader:
+            wine_data = self._extract_wine_from_row(row)
+            if wine_data:
+                wines.append(wine_data)
         
         return wines
     
-    def _map_columns(self, columns: List[str]) -> Dict[str, str]:
+    def _process_excel(self, file_content: bytes) -> List[Dict[str, Any]]:
+        """Processa file Excel"""
+        wines = []
+        workbook = load_workbook(io.BytesIO(file_content))
+        sheet = workbook.active
+        
+        # Leggi header
+        headers = []
+        for cell in sheet[1]:
+            headers.append(cell.value)
+        
+        # Leggi dati
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            row_dict = dict(zip(headers, row))
+            wine_data = self._extract_wine_from_row(row_dict)
+            if wine_data:
+                wines.append(wine_data)
+        
+        return wines
+    
+    def _extract_wine_from_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Mappa le colonne del file alle colonne standard
+        Estrae dati vino da una riga
         
         Args:
-            columns: Lista delle colonne
+            row: Riga del file
             
         Returns:
-            Mappatura colonne
+            Dati vino o None
         """
-        mapping = {}
+        try:
+            # Estrai nome
+            name = self._get_column_value(row, 'name')
+            if not name or str(name).strip() == '':
+                return None
+            
+            # Estrai produttore
+            producer = self._get_column_value(row, 'producer')
+            if not producer:
+                producer = 'Sconosciuto'
+            
+            # Estrai quantità
+            quantity = self._get_column_value(row, 'quantity')
+            if not quantity:
+                quantity = 1
+            else:
+                try:
+                    quantity = int(float(quantity))
+                except (ValueError, TypeError):
+                    quantity = 1
+            
+            # Estrai altri dati
+            vintage = self._get_column_value(row, 'vintage')
+            wine_type = self._get_column_value(row, 'wine_type')
+            region = self._get_column_value(row, 'region')
+            price = self._get_column_value(row, 'price')
+            min_quantity = self._get_column_value(row, 'min_quantity')
+            
+            # Calcola scorta minima se non specificata
+            if not min_quantity:
+                min_quantity = max(1, quantity // 4)  # 25% della quantità
+            else:
+                try:
+                    min_quantity = int(float(min_quantity))
+                except (ValueError, TypeError):
+                    min_quantity = max(1, quantity // 4)
+            
+            # Rileva tipo vino se non specificato
+            if not wine_type:
+                wine_type = self._detect_wine_type(str(name))
+            
+            return {
+                'name': str(name).strip(),
+                'producer': str(producer).strip(),
+                'quantity': quantity,
+                'min_quantity': min_quantity,
+                'vintage': int(vintage) if vintage else None,
+                'wine_type': str(wine_type).strip() if wine_type else 'rosso',
+                'region': str(region).strip() if region else None,
+                'cost_price': float(price) if price else None,
+                'notes': f"Importato da file"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Errore estrazione vino da riga: {e}")
+            return None
+    
+    def _get_column_value(self, row: Dict[str, Any], key: str) -> Any:
+        """
+        Ottieni valore da una colonna
         
-        # Pattern comuni per le colonne
+        Args:
+            row: Riga del file
+            key: Chiave da cercare
+            
+        Returns:
+            Valore della colonna
+        """
+        # Cerca la chiave esatta
+        if key in row:
+            return row[key]
+        
+        # Cerca pattern comuni
         patterns = {
             'name': ['nome', 'name', 'etichetta', 'vino', 'wine', 'prodotto'],
             'producer': ['produttore', 'producer', 'marca', 'brand', 'casa'],
@@ -103,97 +174,14 @@ class CSVProcessor:
             'min_quantity': ['minimo', 'min', 'scorta_minima', 'min_stock']
         }
         
-        for standard_col, patterns_list in patterns.items():
-            for col in columns:
-                if any(pattern in col.lower() for pattern in patterns_list):
-                    mapping[standard_col] = col
-                    break
+        if key in patterns:
+            for pattern in patterns[key]:
+                for col_name, value in row.items():
+                    if pattern in col_name.lower():
+                        return value
         
-        return mapping
-    
-    def _extract_wine_from_row(self, row: pd.Series, column_mapping: Dict[str, str]) -> Dict[str, Any]:
-        """
-        Estrae dati vino da una riga
-        
-        Args:
-            row: Riga del DataFrame
-            column_mapping: Mappatura delle colonne
-            
-        Returns:
-            Dati vino o None
-        """
-        try:
-            # Estrai nome
-            name = self._get_column_value(row, column_mapping, 'name')
-            if not name or pd.isna(name) or str(name).strip() == '':
-                return None
-            
-            # Estrai produttore
-            producer = self._get_column_value(row, column_mapping, 'producer')
-            if not producer or pd.isna(producer):
-                producer = 'Sconosciuto'
-            
-            # Estrai quantità
-            quantity = self._get_column_value(row, column_mapping, 'quantity')
-            if not quantity or pd.isna(quantity):
-                quantity = 1
-            else:
-                try:
-                    quantity = int(float(quantity))
-                except (ValueError, TypeError):
-                    quantity = 1
-            
-            # Estrai altri dati
-            vintage = self._get_column_value(row, column_mapping, 'vintage')
-            wine_type = self._get_column_value(row, column_mapping, 'wine_type')
-            region = self._get_column_value(row, column_mapping, 'region')
-            price = self._get_column_value(row, column_mapping, 'price')
-            min_quantity = self._get_column_value(row, column_mapping, 'min_quantity')
-            
-            # Calcola scorta minima se non specificata
-            if not min_quantity or pd.isna(min_quantity):
-                min_quantity = max(1, quantity // 4)  # 25% della quantità
-            else:
-                try:
-                    min_quantity = int(float(min_quantity))
-                except (ValueError, TypeError):
-                    min_quantity = max(1, quantity // 4)
-            
-            # Rileva tipo vino se non specificato
-            if not wine_type or pd.isna(wine_type):
-                wine_type = self._detect_wine_type(str(name))
-            
-            return {
-                'name': str(name).strip(),
-                'producer': str(producer).strip(),
-                'quantity': quantity,
-                'min_quantity': min_quantity,
-                'vintage': int(vintage) if vintage and not pd.isna(vintage) else None,
-                'wine_type': str(wine_type).strip() if wine_type and not pd.isna(wine_type) else 'rosso',
-                'region': str(region).strip() if region and not pd.isna(region) else None,
-                'cost_price': float(price) if price and not pd.isna(price) else None,
-                'notes': f"Importato da file: {row.get('note', '')}" if 'note' in row else None
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Errore estrazione vino da riga: {e}")
-            return None
-    
-    def _get_column_value(self, row: pd.Series, column_mapping: Dict[str, str], key: str) -> Any:
-        """
-        Ottieni valore da una colonna mappata
-        
-        Args:
-            row: Riga del DataFrame
-            column_mapping: Mappatura delle colonne
-            key: Chiave della mappatura
-            
-        Returns:
-            Valore della colonna
-        """
-        if key in column_mapping:
-            return row.get(column_mapping[key])
         return None
+    
     
     def _detect_wine_type(self, name: str) -> str:
         """
