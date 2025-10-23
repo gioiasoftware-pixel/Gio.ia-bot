@@ -108,6 +108,9 @@ ESEMPI DI RISPOSTA:
 - "Come va?" → Rispondi e fornisci un breve status dell'inventario
 - "Ho venduto vino" → Conferma, congratulati e suggerisci di comunicare i dettagli
 - Domande generali → Rispondi e collega sempre al contesto dell'inventario"""
+        
+        logger.info(f"System prompt length: {len(system_prompt)}")
+        logger.info(f"User prompt: {prompt[:100]}...")
 
         # Configura client OpenAI con parametri espliciti
         try:
@@ -121,6 +124,7 @@ ESEMPI DI RISPOSTA:
             return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
         # Chiamata API con gestione errori robusta
         try:
+            logger.info(f"Chiamata API OpenAI - Model: {OPENAI_MODEL}")
             response = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
@@ -130,8 +134,10 @@ ESEMPI DI RISPOSTA:
                 max_tokens=1500,
                 temperature=0.7
             )
+            logger.info("Chiamata API OpenAI completata con successo")
         except Exception as e:
             logger.error(f"Errore chiamata API OpenAI: {e}")
+            logger.error(f"Tipo errore: {type(e).__name__}")
             return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
         
         if not response.choices or not response.choices[0].message.content:
