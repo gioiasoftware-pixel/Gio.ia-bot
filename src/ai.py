@@ -113,18 +113,12 @@ ESEMPI DI RISPOSTA:
         try:
             # Configurazione esplicita per evitare conflitti
             client = OpenAI(
-                api_key=OPENAI_API_KEY,
-                timeout=30.0,
-                max_retries=3
+                api_key=OPENAI_API_KEY
             )
+            logger.info("Client OpenAI creato con successo")
         except Exception as e:
             logger.error(f"Errore creazione client OpenAI: {e}")
-            # Prova configurazione minima
-            try:
-                client = OpenAI(api_key=OPENAI_API_KEY)
-            except Exception as e2:
-                logger.error(f"Errore anche con configurazione minima: {e2}")
-                return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
+            return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
         # Chiamata API con gestione errori robusta
         try:
             response = client.chat.completions.create(
