@@ -48,7 +48,7 @@ async def start_cmd(update, context):
     # Verifica se l'onboarding è completato
     if not new_onboarding_manager.is_onboarding_complete(telegram_id):
         # Avvia nuovo onboarding
-        new_onboarding_manager.start_new_onboarding(update, context)
+        await new_onboarding_manager.start_new_onboarding(update, context)
     else:
         # Onboarding già completato
         user_data = db_manager.get_user_by_telegram_id(telegram_id)

@@ -31,7 +31,7 @@ class NewOnboardingManager:
             }
         }
     
-    def start_new_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def start_new_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Avvia il nuovo processo di onboarding guidato dall'AI"""
         user = update.effective_user
         telegram_id = user.id
@@ -49,7 +49,7 @@ class NewOnboardingManager:
             )
         
         # Avvia onboarding guidato dall'AI
-        self._start_ai_guided_onboarding(update, context)
+        await self._start_ai_guided_onboarding(update, context)
     
     def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
         """Invia un step dell'onboarding"""
@@ -209,7 +209,7 @@ class NewOnboardingManager:
             logger.error(f"Errore completamento onboarding: {e}")
             update.message.reply_text("❌ Errore durante il completamento. Riprova con `/start`.")
     
-    def _start_ai_guided_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _start_ai_guided_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Avvia onboarding guidato dall'AI"""
         from .ai import get_ai_response
         
