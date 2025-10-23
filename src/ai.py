@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     """Genera risposta AI con accesso ai dati utente."""
+    logger.info(f"OpenAI API Key presente: {bool(OPENAI_API_KEY)}")
     if not OPENAI_API_KEY:
         logger.warning("OpenAI API key non configurata")
         return "⚠️ L'AI non è configurata. Contatta l'amministratore."
