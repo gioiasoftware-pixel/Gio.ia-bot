@@ -63,7 +63,17 @@ class ProcessorClient:
                 data.add_field('file_type', file_type)
                 
                 # Aggiungi il file PER ULTIMO
-                data.add_field('file', file_content, filename=file_name, content_type='application/octet-stream')
+                # Determina content-type basato sul tipo di file
+                if file_type == 'csv':
+                    content_type = 'text/csv'
+                elif file_type in ['excel', 'xlsx', 'xls']:
+                    content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                elif file_type == 'photo':
+                    content_type = 'image/jpeg'
+                else:
+                    content_type = 'application/octet-stream'
+                
+                data.add_field('file', file_content, filename=file_name, content_type=content_type)
                 
                 logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
                 
