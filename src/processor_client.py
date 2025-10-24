@@ -69,13 +69,13 @@ class ProcessorClient:
             # Crea FormData con ordine corretto per FastAPI standard
             data = aiohttp.FormData()
             
-            # Aggiungi campi di testo PRIMA (ordine corretto per FastAPI)
+            # Aggiungi file PRIMA (ordine alternativo per FastAPI)
+            data.add_field('file', file_content, filename=file_name, content_type=mime_type)
+            
+            # Aggiungi campi di testo DOPO
             data.add_field('telegram_id', str(telegram_id))
             data.add_field('business_name', business_name)
             data.add_field('file_type', file_type)
-            
-            # Aggiungi file PER ULTIMO
-            data.add_field('file', file_content, filename=file_name, content_type=mime_type)
             
             logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
             
