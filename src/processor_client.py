@@ -66,16 +66,33 @@ class ProcessorClient:
             else:
                 mime_type = 'application/octet-stream'
             
-            # Crea FormData con ordine corretto per FastAPI standard
+            # Prepara operations per GraphQL multipart
+            operations = {
+                "query": "mutation ProcessInventory($telegram_id: Int!, $business_name: String!, $file_type: String!, $file: Upload!) { processInventory(telegram_id: $telegram_id, business_name: $business_name, file_type: $file_type, file: $file) { status total_wines error } }",
+                "variables": {
+                    "telegram_id": telegram_id,
+                    "business_name": business_name,
+                    "file_type": file_type,
+                    "file": None  # Il file sarà mappato separatamente
+                }
+            }
+            
+            # Mappa il file
+            file_map = {
+                "0": ["variables.file"]
+            }
+            
+            # Prepara files per GraphQL multipart (ordine corretto)
+            files = [
+                ("operations", (None, json.dumps(operations), "application/json")),
+                ("map", (None, json.dumps(file_map), "application/json")),
+                ("0", (file_name, file_content, mime_type))
+            ]
+            
+            # Crea FormData per GraphQL multipart
             data = aiohttp.FormData()
-            
-            # Aggiungi file PRIMA (ordine alternativo per FastAPI)
-            data.add_field('file', file_content, filename=file_name, content_type=mime_type)
-            
-            # Aggiungi campi di testo DOPO
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            data.add_field('file_type', file_type)
+            for field_name, (filename, content, content_type) in files:
+                data.add_field(field_name, content, filename=filename, content_type=content_type)
             
             logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
             
