@@ -54,31 +54,50 @@ class ProcessorClient:
                                file_name: str = "inventario") -> Dict[str, Any]:
         """Invia file inventario al processor per elaborazione"""
         try:
+            import json
+            
+            # Determina content-type basato sul tipo di file
+            if file_type == 'csv':
+                mime_type = 'text/csv'
+            elif file_type in ['excel', 'xlsx', 'xls']:
+                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            elif file_type == 'photo':
+                mime_type = 'image/jpeg'
+            else:
+                mime_type = 'application/octet-stream'
+            
+            # Prepara operations per GraphQL multipart
+            operations = {
+                "query": "mutation ProcessInventory($telegram_id: Int!, $business_name: String!, $file_type: String!, $file: Upload!) { processInventory(telegram_id: $telegram_id, business_name: $business_name, file_type: $file_type, file: $file) { status total_wines error } }",
+                "variables": {
+                    "telegram_id": telegram_id,
+                    "business_name": business_name,
+                    "file_type": file_type,
+                    "file": None  # Il file sarà mappato separatamente
+                }
+            }
+            
+            # Mappa il file
+            file_map = {
+                "0": ["variables.file"]
+            }
+            
+            # Prepara files per GraphQL multipart (ordine corretto)
+            files = [
+                ("operations", (None, json.dumps(operations), "application/json")),
+                ("map", (None, json.dumps(file_map), "application/json")),
+                ("0", (file_name, file_content, mime_type))
+            ]
+            
+            logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
+            
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                # Determina content-type basato sul tipo di file
-                if file_type == 'csv':
-                    content_type = 'text/csv'
-                elif file_type in ['excel', 'xlsx', 'xls']:
-                    content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                elif file_type == 'photo':
-                    content_type = 'image/jpeg'
-                else:
-                    content_type = 'application/octet-stream'
-                
-                # Crea FormData con ordine corretto per FastAPI
+                # Usa FormData per GraphQL multipart
                 data = aiohttp.FormData()
+                for field_name, (filename, content, content_type) in files:
+                    data.add_field(field_name, content, filename=filename, content_type=content_type)
                 
-                # Aggiungi campi di testo PRIMA (ordine corretto per FastAPI)
-                data.add_field('telegram_id', str(telegram_id))
-                data.add_field('business_name', business_name)
-                data.add_field('file_type', file_type)
-                
-                # Aggiungi file PER ULTIMO
-                data.add_field('file', file_content, filename=file_name, content_type=content_type)
-                
-                logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
-                
-                async with session.post(f"{self.base_url}/process-inventory", data=data) as response:
+                async with session.post(f"{self.base_url}/process-inventory-graphql", data=data) as response:
                     if response.status == 200:
                         result = await response.json()
                         logger.info(f"Inventory processed successfully: {result.get('total_wines', 0)} wines")
