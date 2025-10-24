@@ -66,38 +66,22 @@ class ProcessorClient:
             else:
                 mime_type = 'application/octet-stream'
             
-            # Prepara operations per GraphQL multipart
-            operations = {
-                "query": "mutation ProcessInventory($telegram_id: Int!, $business_name: String!, $file_type: String!, $file: Upload!) { processInventory(telegram_id: $telegram_id, business_name: $business_name, file_type: $file_type, file: $file) { status total_wines error } }",
-                "variables": {
-                    "telegram_id": telegram_id,
-                    "business_name": business_name,
-                    "file_type": file_type,
-                    "file": None  # Il file sarà mappato separatamente
-                }
-            }
+            # Crea FormData con ordine corretto per FastAPI standard
+            data = aiohttp.FormData()
             
-            # Mappa il file
-            file_map = {
-                "0": ["variables.file"]
-            }
+            # Aggiungi campi di testo PRIMA (ordine corretto per FastAPI)
+            data.add_field('telegram_id', str(telegram_id))
+            data.add_field('business_name', business_name)
+            data.add_field('file_type', file_type)
             
-            # Prepara files per GraphQL multipart (ordine corretto)
-            files = [
-                ("operations", (None, json.dumps(operations), "application/json")),
-                ("map", (None, json.dumps(file_map), "application/json")),
-                ("0", (file_name, file_content, mime_type))
-            ]
+            # Aggiungi file PER ULTIMO
+            data.add_field('file', file_content, filename=file_name, content_type=mime_type)
             
             logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
             
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                # Usa FormData per GraphQL multipart
-                data = aiohttp.FormData()
-                for field_name, (filename, content, content_type) in files:
-                    data.add_field(field_name, content, filename=filename, content_type=content_type)
                 
-                async with session.post(f"{self.base_url}/process-inventory-graphql", data=data) as response:
+                async with session.post(f"{self.base_url}/process-inventory", data=data) as response:
                     if response.status == 200:
                         result = await response.json()
                         logger.info(f"Inventory processed successfully: {result.get('total_wines', 0)} wines")
