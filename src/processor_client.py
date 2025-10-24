@@ -55,14 +55,6 @@ class ProcessorClient:
         """Invia file inventario al processor per elaborazione"""
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                data = aiohttp.FormData()
-                
-                # Aggiungi i campi PRIMA del file (ordine corretto)
-                data.add_field('telegram_id', str(telegram_id))
-                data.add_field('business_name', business_name)
-                data.add_field('file_type', file_type)
-                
-                # Aggiungi il file PER ULTIMO
                 # Determina content-type basato sul tipo di file
                 if file_type == 'csv':
                     content_type = 'text/csv'
@@ -73,6 +65,15 @@ class ProcessorClient:
                 else:
                     content_type = 'application/octet-stream'
                 
+                # Crea FormData con ordine corretto per FastAPI
+                data = aiohttp.FormData()
+                
+                # Aggiungi campi di testo PRIMA (ordine corretto per FastAPI)
+                data.add_field('telegram_id', str(telegram_id))
+                data.add_field('business_name', business_name)
+                data.add_field('file_type', file_type)
+                
+                # Aggiungi file PER ULTIMO
                 data.add_field('file', file_content, filename=file_name, content_type=content_type)
                 
                 logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
