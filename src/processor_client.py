@@ -56,10 +56,14 @@ class ProcessorClient:
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 data = aiohttp.FormData()
+                
+                # Aggiungi i campi PRIMA del file (ordine corretto)
                 data.add_field('telegram_id', str(telegram_id))
                 data.add_field('business_name', business_name)
                 data.add_field('file_type', file_type)
-                data.add_field('file', file_content, filename=file_name)
+                
+                # Aggiungi il file PER ULTIMO
+                data.add_field('file', file_content, filename=file_name, content_type='application/octet-stream')
                 
                 logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
                 
