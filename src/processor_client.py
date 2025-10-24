@@ -51,51 +51,33 @@ class ProcessorClient:
     
     async def process_inventory(self, telegram_id: int, business_name: str, 
                                file_type: str, file_content: bytes, 
-                               file_name: str = "inventario") -> Dict[str, Any]:
-        """Invia file inventario al processor per elaborazione"""
+                               file_name: str = "inventario", file_id: str = None) -> Dict[str, Any]:
+        """Pubblica metadati inventario su Redis Stream per elaborazione asincrona"""
         try:
-            import json
+            from .messaging.stream import publish_inventory
             
-            # Determina content-type basato sul tipo di file
-            if file_type == 'csv':
-                mime_type = 'text/csv'
-            elif file_type in ['excel', 'xlsx', 'xls']:
-                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            elif file_type == 'photo':
-                mime_type = 'image/jpeg'
-            else:
-                mime_type = 'application/octet-stream'
+            # Se non abbiamo file_id, usiamo un placeholder (il processor dovrà gestire questo caso)
+            telegram_file_id = file_id or "placeholder_file_id"
             
-            # Crea FormData con ordine corretto per FastAPI standard
-            data = aiohttp.FormData()
+            # Pubblica solo metadati su Redis Stream (niente upload file)
+            msg_id = await publish_inventory(
+                chat_id=telegram_id,
+                title=f"{business_name} - {file_name}",
+                file_format=file_type,
+                telegram_file_id=telegram_file_id
+            )
             
-            # Aggiungi campi di testo PRIMA (ordine corretto per FastAPI)
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            data.add_field('file_type', file_type)
+            logger.info(f"Published inventory to stream: {telegram_id}, {business_name}, {file_type}, msg_id: {msg_id}")
             
-            # Aggiungi file PER ULTIMO
-            data.add_field('file', file_content, filename=file_name, content_type=mime_type)
+            return {
+                "status": "success",
+                "message": "Inventory queued for processing",
+                "msg_id": msg_id,
+                "telegram_id": telegram_id
+            }
             
-            logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}")
-            
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                
-                async with session.post(f"{self.base_url}/process-inventory-graphql", data=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        logger.info(f"Inventory processed successfully: {result.get('total_wines', 0)} wines")
-                        return result
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Processor error: {response.status} - {error_text}")
-                        return {
-                            "status": "error",
-                            "error": f"HTTP {response.status}: {error_text}",
-                            "telegram_id": telegram_id
-                        }
         except Exception as e:
-            logger.error(f"Error processing inventory: {e}")
+            logger.error(f"Error publishing inventory: {e}")
             return {
                 "status": "error",
                 "error": str(e),

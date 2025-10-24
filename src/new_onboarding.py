@@ -336,7 +336,8 @@ class NewOnboardingManager:
                 business_name=business_name,  # Nome corretto del locale
                 file_type=file_type,
                 file_content=file_content,
-                file_name=file_name
+                file_name=file_name,
+                file_id=file_data.get('file_id') if 'inventory_file' in context.user_data else photo_data.get('file_id')
             )
             
             if result.get('status') == 'success':
