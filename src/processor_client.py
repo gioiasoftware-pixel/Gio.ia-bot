@@ -21,7 +21,20 @@ class ProcessorClient:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.get(f"{self.base_url}/health") as response:
                     if response.status == 200:
-                        return await response.json()
+                        # Controlla content-type
+                        content_type = response.headers.get('content-type', '')
+                        if 'application/json' in content_type:
+                            return await response.json()
+                        else:
+                            # Se non è JSON, leggi come testo e prova a parsare
+                            text_response = await response.text()
+                            logger.warning(f"Processor returned text instead of JSON: {text_response[:100]}")
+                            return {
+                                "status": "healthy",
+                                "service": "gioia-processor",
+                                "message": "Processor responding but not JSON format",
+                                "raw_response": text_response[:200]
+                            }
                     else:
                         return {
                             "status": "error",
@@ -117,3 +130,4 @@ class ProcessorClient:
 
 # Istanza globale del client
 processor_client = ProcessorClient()
+
