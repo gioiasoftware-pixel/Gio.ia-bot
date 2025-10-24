@@ -252,6 +252,9 @@ class NewOnboardingManager:
         context.user_data['onboarding_step'] = 'waiting_business_name'
         
         logger.info(f"File inventario ricevuto da {telegram_id}: {document.file_name}")
+        
+        # ELABORA IMMEDIATAMENTE IL FILE
+        await self._process_inventory_immediately(update, context)
     
     async def _handle_inventory_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce l'upload della foto inventario"""
@@ -276,6 +279,79 @@ class NewOnboardingManager:
         context.user_data['onboarding_step'] = 'waiting_business_name'
         
         logger.info(f"Foto inventario ricevuta da {telegram_id}")
+        
+        # ELABORA IMMEDIATAMENTE LA FOTO
+        await self._process_inventory_immediately(update, context)
+    
+    async def _process_inventory_immediately(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Elabora immediatamente il file inventario"""
+        from .processor_client import processor_client
+        
+        telegram_id = update.effective_user.id
+        
+        try:
+            # Prepara i dati per l'elaborazione
+            if 'inventory_file' in context.user_data:
+                file_data = context.user_data['inventory_file']
+                file_type = 'csv' if file_data['file_name'].endswith('.csv') else 'excel'
+                
+                # Scarica il file dal Telegram
+                file_obj = await context.bot.get_file(file_data['file_id'])
+                file_content = await file_obj.download_as_bytearray()
+                file_name = file_data['file_name']
+                
+            elif 'inventory_photo' in context.user_data:
+                photo_data = context.user_data['inventory_photo']
+                file_type = 'photo'
+                
+                # Scarica la foto dal Telegram
+                file_obj = await context.bot.get_file(photo_data['file_id'])
+                file_content = await file_obj.download_as_bytearray()
+                file_name = 'inventario.jpg'
+                
+            else:
+                logger.error("Nessun file inventario trovato per elaborazione immediata")
+                return
+            
+            # Invia al microservizio processor
+            logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, file_type={file_type}")
+            
+            result = await processor_client.process_inventory(
+                telegram_id=telegram_id,
+                business_name="Temporaneo",  # Nome temporaneo
+                file_type=file_type,
+                file_content=file_content,
+                file_name=file_name
+            )
+            
+            if result.get('status') == 'success':
+                logger.info(f"✅ Inventario elaborato: {result.get('total_wines', 0)} vini")
+                
+                # Salva il risultato per il completamento
+                context.user_data['processed_wines'] = result.get('total_wines', 0)
+                context.user_data['inventory_processed'] = True
+                
+                # Notifica all'utente
+                await update.message.reply_text(
+                    f"🎉 **Elaborazione completata!**\n\n"
+                    f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
+                    f"📋 Ora dimmi il **nome del tuo locale** per completare la configurazione.\n\n"
+                    f"🏢 **Come si chiama il tuo ristorante/enoteca?**"
+                )
+            else:
+                error_msg = result.get('error', 'Errore sconosciuto')
+                logger.error(f"❌ Errore processor: {error_msg}")
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione inventario**\n\n"
+                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Riprova più tardi o contatta il supporto."
+                )
+                        
+        except Exception as e:
+            logger.error(f"Errore elaborazione inventario: {e}")
+            await update.message.reply_text(
+                "⚠️ Errore durante l'elaborazione. Riprova più tardi."
+            )
     
     async def _handle_text_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce la risposta testuale (nome locale)"""
