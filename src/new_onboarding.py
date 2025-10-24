@@ -186,8 +186,8 @@ class NewOnboardingManager:
             "🎉 **Benvenuto in Gio.ia-bot!**\n\n"
             "Sono il tuo assistente AI per la gestione inventario vini. "
             "Ti guiderò passo dopo passo per configurare il tuo sistema.\n\n"
-            "**Prima cosa importante:** Ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
-            "📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
+            "**Prima cosa:** Ho bisogno di sapere il nome del tuo locale per personalizzare il sistema.\n\n"
+            "🏢 **Come si chiama il tuo ristorante/enoteca?**"
         )
         
         await update.message.reply_text(welcome_message, parse_mode='Markdown')
@@ -209,22 +209,43 @@ class NewOnboardingManager:
         telegram_id = update.effective_user.id
         user_data = context.user_data.get('onboarding_data', {})
         
-        # Gestisci upload file inventario
+        # Gestisci risposta testuale (nome locale) PRIMA
+        if update.message.text:
+            await self._handle_business_name_response(update, context)
+            return True
+        
+        # Gestisci upload file inventario DOPO aver ricevuto il nome
         if update.message.document:
             await self._handle_inventory_upload(update, context)
             return True
         
-        # Gestisci foto inventario
+        # Gestisci foto inventario DOPO aver ricevuto il nome
         if update.message.photo:
             await self._handle_inventory_photo(update, context)
             return True
         
-        # Gestisci risposta testuale (nome locale)
-        if update.message.text:
-            await self._handle_text_response(update, context)
-            return True
-        
         return False
+    
+    async def _handle_business_name_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce la risposta del nome del locale"""
+        telegram_id = update.effective_user.id
+        business_name = update.message.text.strip()
+        
+        # Salva il nome del locale
+        context.user_data['onboarding_data'] = context.user_data.get('onboarding_data', {})
+        context.user_data['onboarding_data']['business_name'] = business_name
+        
+        # Conferma e chiedi il file inventario
+        await update.message.reply_text(
+            f"✅ **Perfetto! {business_name}** configurato!\n\n"
+            f"📋 Ora ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
+            f"📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
+        )
+        
+        # Imposta stato per ricevere file
+        context.user_data['onboarding_step'] = 'waiting_inventory_file'
+        
+        logger.info(f"Nome locale ricevuto da {telegram_id}: {business_name}")
     
     async def _handle_inventory_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce l'upload del file inventario"""
@@ -232,13 +253,13 @@ class NewOnboardingManager:
         
         telegram_id = update.effective_user.id
         document = update.message.document
+        business_name = context.user_data.get('onboarding_data', {}).get('business_name', 'Temporaneo')
         
         # Ringrazia per il file
         await update.message.reply_text(
-            "✅ **Perfetto! File inventario ricevuto!**\n\n"
-            "📋 Sto elaborando il tuo inventario per creare il backup del giorno 0...\n\n"
-            "Ora ho bisogno di sapere il **nome del tuo locale** per completare la configurazione.\n\n"
-            "🏢 **Come si chiama il tuo ristorante/enoteca?**"
+            f"✅ **Perfetto! File inventario ricevuto!**\n\n"
+            f"📋 Sto elaborando l'inventario di **{business_name}** per creare il backup del giorno 0...\n\n"
+            f"🔄 **Elaborazione in corso...**"
         )
         
         # Salva il file per l'elaborazione
@@ -248,25 +269,22 @@ class NewOnboardingManager:
             'file_size': document.file_size
         }
         
-        # Imposta stato per ricevere nome locale
-        context.user_data['onboarding_step'] = 'waiting_business_name'
-        
         logger.info(f"File inventario ricevuto da {telegram_id}: {document.file_name}")
         
-        # ELABORA IMMEDIATAMENTE IL FILE
-        await self._process_inventory_immediately(update, context)
+        # ELABORA IMMEDIATAMENTE IL FILE con nome corretto
+        await self._process_inventory_immediately(update, context, business_name)
     
     async def _handle_inventory_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce l'upload della foto inventario"""
         telegram_id = update.effective_user.id
         photo = update.message.photo[-1]  # Prendi la foto più grande
+        business_name = context.user_data.get('onboarding_data', {}).get('business_name', 'Temporaneo')
         
         # Ringrazia per la foto
         await update.message.reply_text(
-            "✅ **Perfetto! Foto inventario ricevuta!**\n\n"
-            "📷 Sto elaborando l'immagine con OCR per estrarre i dati dell'inventario...\n\n"
-            "Ora ho bisogno di sapere il **nome del tuo locale** per completare la configurazione.\n\n"
-            "🏢 **Come si chiama il tuo ristorante/enoteca?**"
+            f"✅ **Perfetto! Foto inventario ricevuta!**\n\n"
+            f"📷 Sto elaborando l'immagine di **{business_name}** con OCR per estrarre i dati dell'inventario...\n\n"
+            f"🔄 **Elaborazione in corso...**"
         )
         
         # Salva la foto per l'elaborazione
@@ -275,15 +293,12 @@ class NewOnboardingManager:
             'file_size': photo.file_size
         }
         
-        # Imposta stato per ricevere nome locale
-        context.user_data['onboarding_step'] = 'waiting_business_name'
-        
         logger.info(f"Foto inventario ricevuta da {telegram_id}")
         
-        # ELABORA IMMEDIATAMENTE LA FOTO
-        await self._process_inventory_immediately(update, context)
+        # ELABORA IMMEDIATAMENTE LA FOTO con nome corretto
+        await self._process_inventory_immediately(update, context, business_name)
     
-    async def _process_inventory_immediately(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _process_inventory_immediately(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
         """Elabora immediatamente il file inventario"""
         from .processor_client import processor_client
         
@@ -314,11 +329,11 @@ class NewOnboardingManager:
                 return
             
             # Invia al microservizio processor
-            logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, file_type={file_type}")
+            logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}")
             
             result = await processor_client.process_inventory(
                 telegram_id=telegram_id,
-                business_name="Temporaneo",  # Nome temporaneo
+                business_name=business_name,  # Nome corretto del locale
                 file_type=file_type,
                 file_content=file_content,
                 file_name=file_name
@@ -331,13 +346,8 @@ class NewOnboardingManager:
                 context.user_data['processed_wines'] = result.get('total_wines', 0)
                 context.user_data['inventory_processed'] = True
                 
-                # Notifica all'utente
-                await update.message.reply_text(
-                    f"🎉 **Elaborazione completata!**\n\n"
-                    f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
-                    f"📋 Ora dimmi il **nome del tuo locale** per completare la configurazione.\n\n"
-                    f"🏢 **Come si chiama il tuo ristorante/enoteca?**"
-                )
+                # Completa l'onboarding
+                await self._complete_onboarding_final(update, context, business_name)
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 logger.error(f"❌ Errore processor: {error_msg}")
@@ -351,6 +361,46 @@ class NewOnboardingManager:
             logger.error(f"Errore elaborazione inventario: {e}")
             await update.message.reply_text(
                 "⚠️ Errore durante l'elaborazione. Riprova più tardi."
+            )
+    
+    async def _complete_onboarding_final(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
+        """Completa l'onboarding dopo l'elaborazione del file"""
+        telegram_id = update.effective_user.id
+        
+        try:
+            # Aggiorna utente con nome locale e completa onboarding
+            db_manager.update_user_onboarding(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                onboarding_completed=True
+            )
+            
+            # Messaggio di completamento
+            processed_wines = context.user_data.get('processed_wines', 0)
+            await update.message.reply_text(
+                f"🎉 **Onboarding completato con successo!**\n\n"
+                f"🏢 **{business_name}** è ora configurato!\n\n"
+                f"✅ **{processed_wines} vini** elaborati e salvati\n"
+                f"✅ Inventario giorno 0 salvato\n"
+                f"✅ Sistema pronto per l'uso\n\n"
+                f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!\n"
+                f"📋 Usa /help per vedere tutti i comandi disponibili."
+            )
+            
+            # Pulisci dati temporanei
+            context.user_data.pop('onboarding_step', None)
+            context.user_data.pop('onboarding_data', None)
+            context.user_data.pop('inventory_file', None)
+            context.user_data.pop('inventory_photo', None)
+            context.user_data.pop('processed_wines', None)
+            context.user_data.pop('inventory_processed', None)
+            
+            logger.info(f"Onboarding completato per {business_name} (ID: {telegram_id})")
+            
+        except Exception as e:
+            logger.error(f"Errore completamento onboarding: {e}")
+            await update.message.reply_text(
+                "❌ Errore durante il completamento. Riprova con `/start`."
             )
     
     async def _handle_text_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
