@@ -256,8 +256,8 @@ async def handle_document_with_onboarding(update, context):
         # Gestisci durante onboarding AI
         await new_onboarding_manager.handle_ai_guided_response(update, context)
     else:
-        # Gestisci upload normale
-        file_upload_manager.handle_document(update, context)
+        # Gestisci upload normale - CORREZIONE: Aggiungi await
+        await file_upload_manager.handle_document(update, context)
 
 
 async def handle_photo_with_onboarding(update, context):
@@ -280,8 +280,8 @@ async def handle_photo_with_onboarding(update, context):
         # Gestisci durante onboarding AI
         await new_onboarding_manager.handle_ai_guided_response(update, context)
     else:
-        # Gestisci upload normale
-        file_upload_manager.handle_photo(update, context)
+        # Gestisci upload normale - CORREZIONE: Aggiungi await
+        await file_upload_manager.handle_photo(update, context)
 
 
 # Gestione callback query
