@@ -138,7 +138,7 @@ async def help_cmd(update, context):
         "• 📈 Report e statistiche\n\n"
         "🛠️ **Comandi tecnici:**\n"
         "• `/testai` - Test connessione AI\n"
-        "• `/testprocessor` - Test connessione processor\n\n"
+        "• `/testprocessor` - Test connessione processor\n"
         "❓ **Esempi di domande:**\n"
         "• \"Quali vini devo riordinare?\"\n"
         "• \"Fammi un report del mio inventario\"\n"

@@ -1,6 +1,7 @@
 """
 Client per comunicazione con il microservizio processor
 """
+import asyncio
 import aiohttp
 import logging
 from typing import Dict, Any, Optional
@@ -13,7 +14,7 @@ class ProcessorClient:
     
     def __init__(self):
         self.base_url = PROCESSOR_URL
-        self.timeout = aiohttp.ClientTimeout(total=30)
+        self.timeout = aiohttp.ClientTimeout(total=120)  # 2 minuti per elaborazione file
     
     async def health_check(self) -> Dict[str, Any]:
         """Verifica stato del processor"""
@@ -52,32 +53,45 @@ class ProcessorClient:
     async def process_inventory(self, telegram_id: int, business_name: str, 
                                file_type: str, file_content: bytes, 
                                file_name: str = "inventario", file_id: str = None) -> Dict[str, Any]:
-        """Pubblica metadati inventario su Redis Stream per elaborazione asincrona"""
+        """Invia file direttamente al processor via HTTP POST multipart"""
         try:
-            from .messaging.stream import publish_inventory
-            
-            # Se non abbiamo file_id, usiamo un placeholder (il processor dovrà gestire questo caso)
-            telegram_file_id = file_id or "placeholder_file_id"
-            
-            # Pubblica solo metadati su Redis Stream (niente upload file)
-            msg_id = await publish_inventory(
-                chat_id=telegram_id,
-                title=f"{business_name} - {file_name}",
-                file_format=file_type,
-                telegram_file_id=telegram_file_id
-            )
-            
-            logger.info(f"Published inventory to stream: {telegram_id}, {business_name}, {file_type}, msg_id: {msg_id}")
-            
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                # Prepara form data multipart
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', business_name)
+                form.add_field('file_type', file_type)
+                # Invia file come campo 'file' (nome richiesto dall'endpoint FastAPI)
+                form.add_field('file', file_content, filename=file_name, content_type='application/octet-stream')
+                
+                logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}, size={len(file_content)} bytes")
+                
+                async with session.post(
+                    f"{self.base_url}/process-inventory",
+                    data=form,
+                    timeout=aiohttp.ClientTimeout(total=120)  # 2 minuti timeout
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Successfully processed inventory: {result.get('total_wines', 0)} wines")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Processor error HTTP {response.status}: {error_text}")
+                        return {
+                            "status": "error",
+                            "error": f"HTTP {response.status}: {error_text[:200]}",
+                            "telegram_id": telegram_id
+                        }
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout sending inventory to processor after 120s")
             return {
-                "status": "success",
-                "message": "Inventory queued for processing",
-                "msg_id": msg_id,
+                "status": "error",
+                "error": "Timeout: elaborazione richiede troppo tempo. Riprova più tardi.",
                 "telegram_id": telegram_id
             }
-            
         except Exception as e:
-            logger.error(f"Error publishing inventory: {e}")
+            logger.error(f"Error sending inventory to processor: {e}")
             return {
                 "status": "error",
                 "error": str(e),
