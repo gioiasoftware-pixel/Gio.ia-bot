@@ -69,12 +69,28 @@ class FileUploadManager:
             )
             
             if result.get('status') == 'success':
-                await update.message.reply_text(
+                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
+                total_wines = result.get('total_wines', 0)
+                warnings_count = result.get('warnings_count', 0)
+                
+                message = (
                     f"🎉 **Elaborazione completata!**\n\n"
-                    f"✅ **{result.get('total_wines', 0)} vini** elaborati e salvati\n"
+                    f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
+                )
+                
+                if warnings_count > 0:
+                    message += (
+                        f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
+                        f"📝 I dettagli sono salvati nelle note di ogni vino\n"
+                        f"💡 Verifica i vini nel tuo inventario per i dettagli\n\n"
+                    )
+                
+                message += (
                     f"🏢 **{business_name}** aggiornato con successo\n\n"
                     f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
                 )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 await update.message.reply_text(
@@ -126,12 +142,27 @@ class FileUploadManager:
             )
             
             if result.get('status') == 'success':
-                await update.message.reply_text(
+                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
+                total_wines = result.get('total_wines', 0)
+                warnings_count = result.get('warnings_count', 0)
+                
+                message = (
                     f"🎉 **Elaborazione OCR completata!**\n\n"
-                    f"✅ **{result.get('total_wines', 0)} vini** estratti e salvati\n"
+                    f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
+                )
+                
+                if warnings_count > 0:
+                    message += (
+                        f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
+                        f"📝 I dettagli sono salvati nelle note di ogni vino\n\n"
+                    )
+                
+                message += (
                     f"🏢 **{business_name}** aggiornato con successo\n\n"
                     f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
                 )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 await update.message.reply_text(

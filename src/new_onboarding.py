@@ -341,10 +341,16 @@ class NewOnboardingManager:
             )
             
             if result.get('status') == 'success':
-                logger.info(f"✅ Inventario elaborato: {result.get('total_wines', 0)} vini")
+                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
+                warnings_count = result.get('warnings_count', 0)
+                
+                logger.info(f"✅ Inventario elaborato: {saved_wines} vini salvati")
+                if warnings_count > 0:
+                    logger.warning(f"⚠️ {warnings_count} vini salvati con warning/errori")
                 
                 # Salva il risultato per il completamento
-                context.user_data['processed_wines'] = result.get('total_wines', 0)
+                context.user_data['processed_wines'] = saved_wines
+                context.user_data['warnings_count'] = warnings_count
                 context.user_data['inventory_processed'] = True
                 
                 # Completa l'onboarding
@@ -378,15 +384,28 @@ class NewOnboardingManager:
             
             # Messaggio di completamento
             processed_wines = context.user_data.get('processed_wines', 0)
-            await update.message.reply_text(
+            warnings_count = context.user_data.get('warnings_count', 0)
+            
+            message = (
                 f"🎉 **Onboarding completato con successo!**\n\n"
                 f"🏢 **{business_name}** è ora configurato!\n\n"
                 f"✅ **{processed_wines} vini** elaborati e salvati\n"
+            )
+            
+            if warnings_count > 0:
+                message += (
+                    f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
+                    f"📝 I dettagli sono nelle note di ogni vino\n\n"
+                )
+            
+            message += (
                 f"✅ Inventario giorno 0 salvato\n"
                 f"✅ Sistema pronto per l'uso\n\n"
                 f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!\n"
                 f"📋 Usa /help per vedere tutti i comandi disponibili."
             )
+            
+            await update.message.reply_text(message, parse_mode='Markdown')
             
             # Pulisci dati temporanei
             context.user_data.pop('onboarding_step', None)
