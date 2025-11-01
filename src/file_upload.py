@@ -60,13 +60,54 @@ class FileUploadManager:
             telegram_id = update.effective_user.id
             business_name = "Upload Manuale"  # Nome temporaneo
             
-            result = await processor_client.process_inventory(
+            # Invia file e ottieni job_id
+            job_response = await processor_client.process_inventory(
                 telegram_id=telegram_id,
                 business_name=business_name,
                 file_type=file_type,
                 file_content=file_content,
                 file_name=document.file_name
             )
+            
+            if job_response.get('status') == 'error':
+                # Errore creando job
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione inventario**\n\n"
+                    f"Dettagli: {job_response.get('error', 'Errore sconosciuto')[:200]}...\n\n"
+                    f"Riprova più tardi o contatta il supporto."
+                )
+                return True
+            
+            job_id = job_response.get('job_id')
+            if not job_id:
+                await update.message.reply_text(
+                    f"⚠️ **Errore**: Nessun job_id ricevuto dal processor."
+                )
+                return True
+            
+            # Notifica utente che elaborazione è iniziata
+            progress_msg = await update.message.reply_text(
+                f"✅ **File ricevuto!**\n\n"
+                f"📄 **Nome**: {document.file_name}\n"
+                f"📊 **Dimensione**: {len(file_content):,} bytes\n"
+                f"🔄 **Elaborazione in corso...**\n"
+                f"📋 Job ID: `{job_id}`\n\n"
+                f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
+                parse_mode='Markdown'
+            )
+            
+            # Attendi completamento job
+            result = await processor_client.wait_for_job_completion(
+                job_id=job_id,
+                max_wait_seconds=3600,  # 1 ora massimo
+                poll_interval=10  # Poll ogni 10 secondi
+            )
+            
+            # Elimina messaggio progress
+            try:
+                await progress_msg.delete()
+            except:
+                pass
             
             if result.get('status') == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
@@ -133,13 +174,52 @@ class FileUploadManager:
             telegram_id = update.effective_user.id
             business_name = "Upload Manuale"  # Nome temporaneo
             
-            result = await processor_client.process_inventory(
+            # Invia file e ottieni job_id
+            job_response = await processor_client.process_inventory(
                 telegram_id=telegram_id,
                 business_name=business_name,
                 file_type='photo',
                 file_content=file_content,
                 file_name='inventario.jpg'
             )
+            
+            if job_response.get('status') == 'error':
+                # Errore creando job
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione OCR**\n\n"
+                    f"Dettagli: {job_response.get('error', 'Errore sconosciuto')[:200]}...\n\n"
+                    f"Riprova più tardi o contatta il supporto."
+                )
+                return True
+            
+            job_id = job_response.get('job_id')
+            if not job_id:
+                await update.message.reply_text(
+                    f"⚠️ **Errore**: Nessun job_id ricevuto dal processor."
+                )
+                return True
+            
+            # Notifica utente che elaborazione è iniziata
+            progress_msg = await update.message.reply_text(
+                f"✅ **Foto ricevuta!**\n\n"
+                f"🔄 **Elaborazione OCR in corso...**\n"
+                f"📋 Job ID: `{job_id}`\n\n"
+                f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
+                parse_mode='Markdown'
+            )
+            
+            # Attendi completamento job
+            result = await processor_client.wait_for_job_completion(
+                job_id=job_id,
+                max_wait_seconds=3600,  # 1 ora massimo
+                poll_interval=10  # Poll ogni 10 secondi
+            )
+            
+            # Elimina messaggio progress
+            try:
+                await progress_msg.delete()
+            except:
+                pass
             
             if result.get('status') == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))

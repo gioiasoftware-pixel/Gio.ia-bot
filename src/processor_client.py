@@ -53,9 +53,12 @@ class ProcessorClient:
     async def process_inventory(self, telegram_id: int, business_name: str, 
                                file_type: str, file_content: bytes, 
                                file_name: str = "inventario", file_id: str = None) -> Dict[str, Any]:
-        """Invia file direttamente al processor via HTTP POST multipart"""
+        """
+        Invia file al processor e ritorna job_id.
+        L'elaborazione avviene in background - usa get_job_status per verificare progresso.
+        """
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 # Prepara form data multipart
                 form = aiohttp.FormData()
                 form.add_field('telegram_id', str(telegram_id))
@@ -69,11 +72,12 @@ class ProcessorClient:
                 async with session.post(
                     f"{self.base_url}/process-inventory",
                     data=form,
-                    timeout=aiohttp.ClientTimeout(total=120)  # 2 minuti timeout
+                    timeout=aiohttp.ClientTimeout(total=30)  # Timeout corto, ritorna subito job_id
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        logger.info(f"Successfully processed inventory: {result.get('total_wines', 0)} wines")
+                        job_id = result.get('job_id')
+                        logger.info(f"Job created: {job_id}")
                         return result
                     else:
                         error_text = await response.text()
@@ -84,10 +88,10 @@ class ProcessorClient:
                             "telegram_id": telegram_id
                         }
         except asyncio.TimeoutError:
-            logger.error(f"Timeout sending inventory to processor after 120s")
+            logger.error(f"Timeout creating job")
             return {
                 "status": "error",
-                "error": "Timeout: elaborazione richiede troppo tempo. Riprova più tardi.",
+                "error": "Timeout creando job. Riprova più tardi.",
                 "telegram_id": telegram_id
             }
         except Exception as e:
@@ -97,6 +101,81 @@ class ProcessorClient:
                 "error": str(e),
                 "telegram_id": telegram_id
             }
+    
+    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """
+        Ottieni stato elaborazione per job_id
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.get(f"{self.base_url}/status/{job_id}") as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 404:
+                        return {
+                            "status": "error",
+                            "error": f"Job {job_id} not found"
+                        }
+                    else:
+                        error_text = await response.text()
+                        return {
+                            "status": "error",
+                            "error": f"HTTP {response.status}: {error_text[:200]}"
+                        }
+        except Exception as e:
+            logger.error(f"Error getting job status: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def wait_for_job_completion(self, job_id: str, max_wait_seconds: int = 3600, 
+                                      poll_interval: int = 10) -> Dict[str, Any]:
+        """
+        Attende completamento job con polling.
+        Ritorna risultato quando job è completato o errore.
+        """
+        import time
+        start_time = time.time()
+        
+        logger.info(f"Waiting for job {job_id} to complete (max {max_wait_seconds}s, poll every {poll_interval}s)")
+        
+        while True:
+            # Controlla timeout
+            elapsed = time.time() - start_time
+            if elapsed > max_wait_seconds:
+                return {
+                    "status": "error",
+                    "error": f"Job timeout dopo {max_wait_seconds} secondi",
+                    "job_id": job_id
+                }
+            
+            # Poll status
+            status = await self.get_job_status(job_id)
+            
+            if status.get("status") == "completed":
+                # Job completato - ritorna risultato
+                result = status.get("result", {})
+                logger.info(f"Job {job_id} completed: {result.get('saved_wines', 0)} wines saved")
+                return result
+            elif status.get("status") == "error":
+                # Job errore
+                return {
+                    "status": "error",
+                    "error": status.get("error", "Unknown error"),
+                    "job_id": job_id
+                }
+            elif status.get("status") in ["pending", "processing"]:
+                # Ancora in elaborazione - mostra progress
+                progress = status.get("progress_percent", 0)
+                processed = status.get("processed_wines", 0)
+                total = status.get("total_wines", 0)
+                logger.info(f"Job {job_id} progress: {progress}% ({processed}/{total} wines)")
+                await asyncio.sleep(poll_interval)
+            else:
+                # Stato sconosciuto
+                logger.warning(f"Job {job_id} unknown status: {status.get('status')}")
+                await asyncio.sleep(poll_interval)
     
     async def get_status(self, telegram_id: int) -> Dict[str, Any]:
         """Ottieni stato elaborazione per utente"""

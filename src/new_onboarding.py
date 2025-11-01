@@ -331,13 +331,48 @@ class NewOnboardingManager:
             # Invia al microservizio processor
             logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}")
             
-            result = await processor_client.process_inventory(
+            # Invia file e ottieni job_id
+            job_response = await processor_client.process_inventory(
                 telegram_id=telegram_id,
                 business_name=business_name,  # Nome corretto del locale
                 file_type=file_type,
                 file_content=file_content,
                 file_name=file_name,
                 file_id=file_data.get('file_id') if 'inventory_file' in context.user_data else photo_data.get('file_id')
+            )
+            
+            if job_response.get('status') == 'error':
+                # Errore creando job
+                error_msg = job_response.get('error', 'Errore sconosciuto')
+                logger.error(f"❌ Errore processor: {error_msg}")
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione inventario**\n\n"
+                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Riprova più tardi o contatta il supporto."
+                )
+                return
+            
+            job_id = job_response.get('job_id')
+            if not job_id:
+                await update.message.reply_text(
+                    f"⚠️ **Errore**: Nessun job_id ricevuto dal processor."
+                )
+                return
+            
+            # Notifica utente che elaborazione è iniziata
+            await update.message.reply_text(
+                f"✅ **File ricevuto!**\n\n"
+                f"🔄 **Elaborazione in corso...**\n"
+                f"⏳ Questo può richiedere alcuni minuti...\n\n"
+                f"📋 Job ID: `{job_id}`",
+                parse_mode='Markdown'
+            )
+            
+            # Attendi completamento job
+            result = await processor_client.wait_for_job_completion(
+                job_id=job_id,
+                max_wait_seconds=3600,  # 1 ora massimo
+                poll_interval=10  # Poll ogni 10 secondi
             )
             
             if result.get('status') == 'success':
