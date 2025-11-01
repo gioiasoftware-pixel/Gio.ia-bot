@@ -228,6 +228,8 @@ class NewOnboardingManager:
     
     async def _handle_business_name_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce la risposta del nome del locale"""
+        from .processor_client import processor_client
+        
         telegram_id = update.effective_user.id
         business_name = update.message.text.strip()
         
@@ -235,12 +237,36 @@ class NewOnboardingManager:
         context.user_data['onboarding_data'] = context.user_data.get('onboarding_data', {})
         context.user_data['onboarding_data']['business_name'] = business_name
         
-        # Conferma e chiedi il file inventario
-        await update.message.reply_text(
-            f"✅ **Perfetto! {business_name}** configurato!\n\n"
-            f"📋 Ora ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
-            f"📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
-        )
+        # Crea le tabelle nel database quando viene dato il nome del locale
+        try:
+            await update.message.reply_text(
+                f"✅ **Perfetto! {business_name}** ricevuto!\n\n"
+                f"🔧 Sto configurando il database..."
+            )
+            
+            result = await processor_client.create_tables(telegram_id, business_name)
+            
+            if result.get('status') == 'success':
+                await update.message.reply_text(
+                    f"✅ **Database configurato!**\n\n"
+                    f"📋 Ora ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
+                    f"📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
+                )
+            else:
+                error_msg = result.get('error', 'Errore sconosciuto')
+                await update.message.reply_text(
+                    f"⚠️ **Errore configurazione database**\n\n"
+                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Riprova o contatta il supporto."
+                )
+                return
+        except Exception as e:
+            logger.error(f"Error creating tables: {e}")
+            await update.message.reply_text(
+                f"⚠️ **Errore configurazione database**\n\n"
+                f"Riprova più tardi o contatta il supporto."
+            )
+            return
         
         # Imposta stato per ricevere file
         context.user_data['onboarding_step'] = 'waiting_inventory_file'

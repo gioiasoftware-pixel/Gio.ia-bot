@@ -97,3 +97,4 @@ Telegram → Bot (.env → PROCESSOR_URL) → Processor → Database
 - In produzione su Railway, assicurati che `PROCESSOR_URL` punti all'URL pubblico del processor
 - Il processor deve essere raggiungibile dal bot (stessa rete locale per test, pubblico per produzione)
 
+

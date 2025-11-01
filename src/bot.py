@@ -299,17 +299,13 @@ async def handle_schema_delete_confirmation(update, context):
         
         from .processor_client import processor_client
         
-        result = await processor_client.delete_schema(telegram_id, business_name)
+        result = await processor_client.delete_tables(telegram_id, business_name)
         
         if result.get('success'):
-            wines_deleted = result.get('wines_deleted', 0)
-            schema_name = result.get('schema_name', '')
-            
             await update.message.reply_text(
-                f"✅ **Schema cancellato con successo!**\n\n"
-                f"📋 **Schema:** `{schema_name}`\n"
-                f"🗑️ **Vini cancellati:** {wines_deleted}\n\n"
-                f"Lo schema è stato completamente rimosso dal database.",
+                f"✅ **Tabelle cancellate con successo!**\n\n"
+                f"📋 **Locale:** {business_name}\n"
+                f"🗑️ **Tutte le tabelle e i dati sono stati rimossi dal database.**",
                 parse_mode='Markdown'
             )
         else:

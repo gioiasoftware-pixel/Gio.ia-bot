@@ -221,14 +221,44 @@ class ProcessorClient:
                 "error": str(e)
             }
     
-    async def delete_schema(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
+    async def create_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
         """
-        Cancella schema database per utente.
+        Crea le 4 tabelle per un utente quando viene dato il nome del locale.
+        Chiamato durante l'onboarding.
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', business_name)
+                
+                async with session.post(f"{self.base_url}/create-tables", data=form) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Tables created for {telegram_id}/{business_name}")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Error creating tables HTTP {response.status}: {error_text}")
+                        return {
+                            "status": "error",
+                            "error": f"HTTP {response.status}: {error_text[:200]}"
+                        }
+        except Exception as e:
+            logger.error(f"Error creating tables: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def delete_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
+        """
+        Cancella tabelle database per utente.
         SOLO PER telegram_id = 927230913 (admin)
         """
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                url = f"{self.base_url}/schema/{telegram_id}"
+                url = f"{self.base_url}/tables/{telegram_id}"
                 params = {"business_name": business_name}
                 
                 async with session.delete(url, params=params) as response:
@@ -241,7 +271,7 @@ class ProcessorClient:
                             "message": f"HTTP {response.status}: {error_text[:200]}"
                         }
         except Exception as e:
-            logger.error(f"Error deleting schema: {e}")
+            logger.error(f"Error deleting tables: {e}")
             return {
                 "success": False,
                 "message": str(e)
