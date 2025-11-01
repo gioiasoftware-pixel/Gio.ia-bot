@@ -1,7 +1,7 @@
 # 🎯 **STATO PROGETTO GIO.IA-BOT**
 
-**Data:** 31 Ottobre 2025  
-**Versione:** 2.1 - Sistema Microservizi REST API  
+**Data:** 1 Novembre 2025  
+**Versione:** 2.2 - Sistema Tabelle Dinamiche Schema Public  
 **Status:** ✅ **OPERATIVO** - Pronto per test produzione
 
 ---
@@ -51,6 +51,15 @@
 - ✅ **Warning utente**: Bot informa utente se ci sono warning
 - ✅ **Logging completo**: Traccia tutti gli errori per debug
 
+#### **✅ Sistema Tabelle Dinamiche (Novembre 2025)**
+- ✅ **Architettura**: Tabelle dinamiche nello schema `public` invece di schemi separati
+- ✅ **Nome formato**: `"{telegram_id}/{business_name} INVENTARIO"` nello schema public
+- ✅ **4 tabelle per utente**: INVENTARIO, INVENTARIO backup, LOG interazione, Consumi e rifornimenti
+- ✅ **Creazione automatica**: Tabelle create quando utente fornisce nome locale durante onboarding
+- ✅ **Backup automatico**: Backup creato automaticamente dopo salvataggio inventario
+- ✅ **Normalizzazione alcohol_content**: Conversione "14.5%" → 14.5 (float)
+- ✅ **Isolamento dati**: Ogni utente ha le proprie tabelle nello stesso schema public
+
 ---
 
 ## 🎯 **FUNZIONALITÀ PRINCIPALI**
@@ -68,10 +77,12 @@ Bot: "📊 Inventario: 45 vini, 120 bottiglie. 3 scorte basse..."
 ```
 
 ### **📋 Onboarding Utente**
-1. **`/start`** → Upload inventario (CSV/Excel/Foto)
-2. **Nome utente** → Configurazione profilo
-3. **Nome locale** → Completamento setup
-4. **Backup automatico** → Sistema pronto
+1. **`/start`** → Avvia onboarding
+2. **Nome locale** → Fornisce nome ristorante/enoteca → **Crea 4 tabelle database**
+3. **Upload inventario** → Carica file CSV/Excel/Foto
+4. **Elaborazione automatica** → Processor elabora e salva vini
+5. **Backup automatico** → Backup creato nella tabella INVENTARIO backup
+6. **Sistema pronto** → Onboarding completato
 
 ### **📊 Gestione Movimenti**
 - **Riconoscimento automatico:**
@@ -129,10 +140,22 @@ gioia-processor/
 
 ### **🗄️ Database Schema**
 ```sql
+-- Schema public (condiviso)
 users              -- Dati utenti (telegram_id, business_name, etc.)
-├── wines          -- Inventario vini (name, producer, vintage, quantity, etc.)
-├── inventory_backups -- Backup inventario (backup_data, backup_type)
-└── inventory_logs    -- Log movimenti (movement_type, quantity_change)
+processing_jobs    -- Job elaborazione asincroni
+
+-- Tabelle dinamiche per ogni utente (schema public)
+"{telegram_id}/{business_name} INVENTARIO"
+  -- Inventario vini (name, producer, vintage, quantity, etc.)
+  
+"{telegram_id}/{business_name} INVENTARIO backup"
+  -- Backup inventario (backup_data, backup_type, backup_name)
+  
+"{telegram_id}/{business_name} LOG interazione"
+  -- Log interazioni bot (interaction_type, interaction_data)
+  
+"{telegram_id}/{business_name} Consumi e rifornimenti"
+  -- Log movimenti (movement_type, quantity_change, wine_name)
 ```
 
 ### **🔧 Stack Tecnologico**
@@ -178,14 +201,42 @@ Telegram Bot → HTTP POST (multipart/form-data) → Processor → Database
 4. **Test mapping AI** - Verificare riconoscimento colonne
 5. **Test conversione vintage** - Verificare conversioni tipo corrette
 
-### **📋 CHECKLIST TEST**
-- [ ] **Upload CSV con 100+ vini** → Verificare elaborazione
+### **📋 CHECKLIST TEST SISTEMA TABELLE DINAMICHE**
+
+#### **🔧 Test Onboarding e Creazione Tabelle**
+- [ ] **Onboarding completo** → Verificare flow: `/start` → nome locale → upload file
+- [ ] **Creazione tabelle** → Verificare che 4 tabelle vengono create quando viene dato nome locale
+- [ ] **Nome tabelle** → Verificare formato `"{telegram_id}/{business_name} INVENTARIO"`
+- [ ] **Schema public** → Verificare che tabelle sono nello schema `public`
+- [ ] **Messaggi bot** → Verificare feedback durante creazione tabelle
+
+#### **📊 Test Upload e Salvataggio**
+- [ ] **Upload CSV con 100+ vini** → Verificare elaborazione completa
+- [ ] **Salvataggio inventario** → Verificare che vini vengono salvati in tabella INVENTARIO
+- [ ] **Backup automatico** → Verificare che backup viene creato in tabella INVENTARIO backup
 - [ ] **CSV con colonne non standard** → Verificare AI mapping
 - [ ] **CSV con dati mancanti/errati** → Verificare error tracking
-- [ ] **Database verification** → Verificare tutti i vini salvati
+
+#### **🔍 Test Database e Dati**
+- [ ] **Database verification** → Verificare tutti i vini salvati nella tabella corretta
+- [ ] **Isolamento utenti** → Verificare che utente A non vede tabelle utente B
+- [ ] **Normalizzazione dati** → Verificare:
+  - [ ] `vintage`: String → Integer
+  - [ ] `quantity`: Normalizzazione corretta
+  - [ ] `price`: Conversione corretta
+  - [ ] `alcohol_content`: "14.5%" → 14.5 (float)
 - [ ] **Note errori** → Verificare note nei vini problematici
+
+#### **💬 Test Bot e Comandi**
 - [ ] **Bot messages** → Verificare warning all'utente
+- [ ] **Comando `/inventario`** → Verificare lettura da tabella corretta
+- [ ] **Comando `/log`** → Verificare lettura da tabella Consumi e rifornimenti
+- [ ] **Comando `/cancellaschema`** → Verificare cancellazione tabelle (solo admin)
+
+#### **📝 Test Logs e Debug**
 - [ ] **Logs processor** → Verificare errori nel log
+- [ ] **Logs bot** → Verificare messaggi durante onboarding
+- [ ] **Database logs** → Verificare creazione tabelle nei log PostgreSQL
 
 ### **📈 BREVE TERMINE (Settimana 2-4)**
 1. **Ottimizzazioni performance** - Velocizzare elaborazione CSV grandi
@@ -250,8 +301,8 @@ Telegram Bot → HTTP POST (multipart/form-data) → Processor → Database
 - **Moduli Bot:** 9 file principali
 - **Moduli Processor:** 6 file principali
 - **Funzionalità:** 15+ comandi
-- **Database:** 4 tabelle
-- **Endpoints Processor:** 3 (health, process-inventory, status)
+- **Database:** 2 tabelle base (users, processing_jobs) + 4 tabelle dinamiche per utente
+- **Endpoints Processor:** 5 (health, process-inventory, status, create-tables, delete-tables)
 
 ---
 
@@ -270,15 +321,17 @@ Telegram Bot → HTTP POST (multipart/form-data) → Processor → Database
 ### **✅ ULTIME MIGRAZIONI**
 - **REST API**: Bot-processor comunicazione diretta HTTP
 - **CSV Mapping**: Fix mapping AI colonne (inversione corretta)
-- **Type Safety**: Conversione vintage string → int
+- **Type Safety**: Conversione vintage string → int, alcohol_content "14.5%" → 14.5
 - **Error Tracking**: Sistema completo errori/warning nel database
+- **Tabelle Dinamiche**: Sistema tabelle per-utente nello schema public (eliminati schemi separati)
 
 ### **🎯 OBIETTIVO IMMEDIATO**
-Testare il sistema completo in produzione con file CSV reali e verificare:
-1. Elaborazione corretta di tutti i vini
-2. Salvataggio di vini con errori (con note)
-3. Mapping AI colonne funzionante
-4. Messaggi bot informativi
+Testare il nuovo sistema tabelle dinamiche in produzione:
+1. ✅ **Onboarding completo** - Verificare creazione tabelle quando viene dato nome locale
+2. ✅ **Upload e salvataggio** - Verificare salvataggio vini nelle nuove tabelle
+3. ✅ **Backup automatico** - Verificare creazione backup dopo salvataggio
+4. ✅ **Database structure** - Verificare tabelle create nello schema public
+5. ✅ **Isolamento dati** - Verificare che ogni utente vede solo le sue tabelle
 
 **✅ Il sistema è completo e pronto per i test!**
 
@@ -302,7 +355,56 @@ Testare il sistema completo in produzione con file CSV reali e verificare:
 - `vintage`: String → Integer (range 1900-2099)
 - `quantity`: String/Number → Integer (default 1 se invalido)
 - `price`: String/Number → Float (None se invalido)
+- `alcohol_content`: String "14.5%" → Float 14.5 (rimozione % e normalizzazione)
+
+### **Database Tabelle Dinamiche**
+- Tabelle create automaticamente durante onboarding quando utente fornisce nome locale
+- Nome formato: `"{telegram_id}/{business_name} {table_type}"` (es. "927230913/Upload Manuale INVENTARIO")
+- 4 tabelle per utente create nello schema `public`:
+  1. `INVENTARIO` - Inventario vini principale
+  2. `INVENTARIO backup` - Backup automatico inventario
+  3. `LOG interazione` - Log interazioni con bot
+  4. `Consumi e rifornimenti` - Movimenti inventario
+- Endpoint processor: `POST /create-tables` (chiamato durante onboarding)
+- Endpoint admin: `DELETE /tables/{telegram_id}` (solo per telegram_id 927230913)
 
 ---
 
-*Documento aggiornato: 31 Ottobre 2025*
+*Documento aggiornato: 1 Novembre 2025*
+
+---
+
+## 📝 **CHANGELOG DETTAGLIATO**
+
+### **v2.2 - Sistema Tabelle Dinamiche (Novembre 2025)**
+
+#### **🔄 Cambiamenti Architetturali**
+- **Eliminato**: Sistema schemi separati per utente (es. `user_927230913_upload_manuale`)
+- **Implementato**: Sistema tabelle dinamiche nello schema `public`
+- **Vantaggi**: Più semplice gestione, tutte le tabelle nello stesso schema, più facile backup/restore
+
+#### **📊 Database**
+- **Modificato**: `database.py` - Funzioni `ensure_user_schema()` → `ensure_user_tables()`
+- **Nuovo**: Funzione `get_user_table_name()` - Genera nomi tabelle formato `"{telegram_id}/{business_name} INVENTARIO"`
+- **Modificato**: `save_inventory_to_db()` - Salva in tabelle dinamiche invece di schemi
+- **Aggiornato**: `get_user_inventories()` e `get_inventory_status()` - Query su tabelle dinamiche
+- **Aggiunto**: Normalizzazione `alcohol_content` - Conversione "14.5%" → 14.5
+
+#### **🔧 Processor**
+- **Nuovo**: Endpoint `POST /create-tables` - Crea 4 tabelle quando viene dato nome locale
+- **Modificato**: Endpoint `DELETE /schema/{telegram_id}` → `DELETE /tables/{telegram_id}`
+- **Aggiornato**: `main.py` - Import aggiornati, rimossa logica schemi
+
+#### **🤖 Bot**
+- **Modificato**: `processor_client.py` - Aggiunti metodi `create_tables()` e `delete_tables()`
+- **Modificato**: `new_onboarding.py` - Chiama `create_tables()` quando viene dato nome locale
+- **Aggiornato**: `bot.py` - Comando `/cancellaschema` ora cancella tabelle invece di schemi
+
+#### **✅ Fix e Miglioramenti**
+- **Fix**: Normalizzazione `alcohol_content` risolve errore "must be real number, not str"
+- **Migliorato**: Backup automatico creato dopo ogni salvataggio inventario
+- **Migliorato**: Feedback utente durante creazione tabelle
+
+---
+
+**Prossimo Step**: Test completo del nuovo sistema in produzione
