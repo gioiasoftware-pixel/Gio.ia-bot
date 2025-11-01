@@ -139,6 +139,7 @@ async def help_cmd(update, context):
         "🛠️ **Comandi tecnici:**\n"
         "• `/testai` - Test connessione AI\n"
         "• `/testprocessor` - Test connessione processor\n"
+        "• `/cancellaschema <nome>` - [ADMIN] Cancella schema database\n"
         "❓ **Esempi di domande:**\n"
         "• \"Quali vini devo riordinare?\"\n"
         "• \"Fammi un report del mio inventario\"\n"
@@ -224,6 +225,109 @@ async def upload_cmd(update, context):
 async def log_cmd(update, context):
     """Mostra i log dei movimenti inventario"""
     inventory_movement_manager.show_movement_logs(update, context)
+
+async def cancella_schema_cmd(update, context):
+    """
+    Comando per cancellare schema database.
+    SOLO PER telegram_id = 927230913 (admin)
+    """
+    ADMIN_TELEGRAM_ID = 927230913
+    telegram_id = update.effective_user.id
+    
+    # Verifica autorizzazione
+    if telegram_id != ADMIN_TELEGRAM_ID:
+        await update.message.reply_text(
+            "❌ **Non autorizzato**\n\n"
+            "Solo l'amministratore può usare questo comando."
+        )
+        return
+    
+    # Controlla se è stato fornito il nome locale
+    if not context.args:
+        await update.message.reply_text(
+            "🗑️ **Cancella Schema Database**\n\n"
+            "**Uso:** `/cancellaschema <nome_locale>`\n\n"
+            "**Esempio:** `/cancellaschema Enoteca Roma`\n\n"
+            "⚠️ **ATTENZIONE:** Questa operazione cancella permanentemente:\n"
+            "• Tutti i vini nell'inventario\n"
+            "• Tutti i backup\n"
+            "• Tutti i log movimenti\n\n"
+            "L'operazione è irreversibile!"
+        )
+        return
+    
+    business_name = " ".join(context.args)
+    
+    # Chiedi conferma
+    context.user_data['pending_schema_delete'] = {
+        'business_name': business_name,
+        'telegram_id': telegram_id
+    }
+    
+    await update.message.reply_text(
+        f"⚠️ **CONFERMA CANCELLAZIONE SCHEMA**\n\n"
+        f"📋 **Nome locale:** {business_name}\n"
+        f"👤 **Telegram ID:** {telegram_id}\n\n"
+        f"⚠️ **Questa operazione è PERMANENTE e IRREVERSIBILE!**\n\n"
+        f"Per confermare, rispondi: `CONFERMA CANCELLA`\n"
+        f"Per annullare, rispondi: `ANNULLA`",
+        parse_mode='Markdown'
+    )
+
+async def handle_schema_delete_confirmation(update, context):
+    """Gestisce conferma cancellazione schema"""
+    ADMIN_TELEGRAM_ID = 927230913
+    telegram_id = update.effective_user.id
+    
+    if telegram_id != ADMIN_TELEGRAM_ID:
+        return False
+    
+    pending = context.user_data.get('pending_schema_delete')
+    if not pending:
+        return False
+    
+    user_text = update.message.text.strip().upper()
+    
+    if user_text == "CONFERMA CANCELLA":
+        business_name = pending['business_name']
+        
+        await update.message.reply_text("🔄 Cancellazione schema in corso...")
+        
+        from .processor_client import processor_client
+        
+        result = await processor_client.delete_schema(telegram_id, business_name)
+        
+        if result.get('success'):
+            wines_deleted = result.get('wines_deleted', 0)
+            schema_name = result.get('schema_name', '')
+            
+            await update.message.reply_text(
+                f"✅ **Schema cancellato con successo!**\n\n"
+                f"📋 **Schema:** `{schema_name}`\n"
+                f"🗑️ **Vini cancellati:** {wines_deleted}\n\n"
+                f"Lo schema è stato completamente rimosso dal database.",
+                parse_mode='Markdown'
+            )
+        else:
+            error_msg = result.get('message', 'Errore sconosciuto')
+            await update.message.reply_text(
+                f"❌ **Errore cancellazione schema**\n\n"
+                f"Dettagli: {error_msg}"
+            )
+        
+        # Pulisci pending
+        context.user_data.pop('pending_schema_delete', None)
+        return True
+    
+    elif user_text == "ANNULLA":
+        await update.message.reply_text(
+            "✅ **Operazione annullata**\n\n"
+            "Lo schema non è stato cancellato."
+        )
+        context.user_data.pop('pending_schema_delete', None)
+        return True
+    
+    return False
 
 
 async def handle_document_with_onboarding(update, context):
@@ -373,6 +477,9 @@ def main():
     app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("scorte", scorte_cmd))
     app.add_handler(CommandHandler("log", log_cmd))
+    
+    # Comando admin (solo per 927230913)
+    app.add_handler(CommandHandler("cancellaschema", cancella_schema_cmd))
     
     # Callback query handler
     app.add_handler(CallbackQueryHandler(callback_handler))

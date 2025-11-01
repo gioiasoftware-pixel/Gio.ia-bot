@@ -220,6 +220,32 @@ class ProcessorClient:
                 "status": "error",
                 "error": str(e)
             }
+    
+    async def delete_schema(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
+        """
+        Cancella schema database per utente.
+        SOLO PER telegram_id = 927230913 (admin)
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                url = f"{self.base_url}/schema/{telegram_id}"
+                params = {"business_name": business_name}
+                
+                async with session.delete(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        error_text = await response.text()
+                        return {
+                            "success": False,
+                            "message": f"HTTP {response.status}: {error_text[:200]}"
+                        }
+        except Exception as e:
+            logger.error(f"Error deleting schema: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
 
 # Istanza globale del client
 processor_client = ProcessorClient()
