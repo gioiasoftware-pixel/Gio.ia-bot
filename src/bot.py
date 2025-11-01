@@ -155,6 +155,10 @@ async def help_cmd(update, context):
 
 
 async def chat_handler(update, context):
+    # Verifica se c'è una conferma schema delete in sospeso (PRIMA di altre operazioni)
+    if await handle_schema_delete_confirmation(update, context):
+        return
+    
     try:
         user = update.effective_user
         user_text = update.message.text
