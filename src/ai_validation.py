@@ -36,3 +36,4 @@ def validate_movement_result(json_data: dict) -> Optional[MovementDetectionResul
         logger.error(f"Invalid movement result from AI: {e}, data: {json_data}")
         return None
 
+
