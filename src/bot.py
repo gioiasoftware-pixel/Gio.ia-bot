@@ -185,8 +185,13 @@ async def chat_handler(update, context):
             return
         
         # Gestisci movimenti inventario
-        if await inventory_movement_manager.process_movement_message(update, context):
+        logger.info(f"[BOT] Calling process_movement_message for: {user_text[:50]}...")
+        movement_handled = await inventory_movement_manager.process_movement_message(update, context)
+        if movement_handled:
+            logger.info(f"[BOT] Movement message handled, not passing to AI")
             return
+        else:
+            logger.info(f"[BOT] Movement message NOT handled, passing to AI")
         
         # Gestisci aggiunta vino se in corso
         if inventory_manager.handle_wine_data(update, context):
@@ -197,6 +202,25 @@ async def chat_handler(update, context):
         # Chiama AI con contesto utente
         reply = get_ai_response(user_text, telegram_id)
         
+        # Verifica se l'AI ha rilevato un movimento (marker speciale)
+        if reply and reply.startswith("__MOVEMENT__:"):
+            # Estrai informazioni movimento dal marker
+            parts = reply.split(":")
+            if len(parts) >= 4:
+                movement_type = parts[1]
+                quantity = int(parts[2])
+                wine_name = ":".join(parts[3:])  # In caso il nome vino contenga ":"
+                
+                logger.info(f"[BOT] Processing movement detected by AI: {movement_type} {quantity} {wine_name}")
+                
+                # Processa movimento in modo asincrono
+                from .ai import _process_movement_async
+                movement_result = await _process_movement_async(telegram_id, wine_name, movement_type, quantity)
+                await update.message.reply_text(movement_result)
+                logger.info(f"Movimento processato e risposta inviata a {username}")
+                return
+        
+        # Risposta normale AI
         await update.message.reply_text(reply)
         logger.info(f"Risposta inviata a {username}")
         

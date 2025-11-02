@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import asyncio
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database import db_manager
@@ -19,6 +20,136 @@ os.environ.pop('all_proxy', None)
 logger = logging.getLogger(__name__)
 
 
+def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
+    """
+    Rileva se il prompt contiene un movimento inventario (consumo/rifornimento).
+    Se sì, lo processa direttamente e ritorna il messaggio di conferma.
+    Se no, ritorna None e il flow continua normalmente con l'AI.
+    """
+    try:
+        prompt_lower = prompt.lower().strip()
+        
+        # Pattern per consumo
+        consumo_patterns = [
+            r'ho venduto (\d+) bottiglie? di (.+)',
+            r'ho consumato (\d+) bottiglie? di (.+)',
+            r'ho bevuto (\d+) bottiglie? di (.+)',
+            r'ho venduto (\d+) (.+)',
+            r'ho consumato (\d+) (.+)',
+            r'ho bevuto (\d+) (.+)',
+            r'venduto (\d+) (.+)',
+            r'consumato (\d+) (.+)',
+            r'bevuto (\d+) (.+)',
+        ]
+        
+        # Pattern per rifornimento
+        rifornimento_patterns = [
+            r'ho ricevuto (\d+) bottiglie? di (.+)',
+            r'ho comprato (\d+) bottiglie? di (.+)',
+            r'ho aggiunto (\d+) bottiglie? di (.+)',
+            r'ho ricevuto (\d+) (.+)',
+            r'ho comprato (\d+) (.+)',
+            r'ho aggiunto (\d+) (.+)',
+            r'ricevuto (\d+) (.+)',
+            r'comprato (\d+) (.+)',
+            r'aggiunto (\d+) (.+)',
+        ]
+        
+        # Verifica onboarding completato
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.onboarding_completed:
+            return None  # Non processare movimenti se onboarding non completato
+        
+        # Cerca pattern consumo
+        for pattern in consumo_patterns:
+            match = re.search(pattern, prompt_lower)
+            if match:
+                quantity = int(match.group(1))
+                wine_name = match.group(2).strip()
+                logger.info(f"[AI-MOVEMENT] Rilevato consumo: {quantity} {wine_name}")
+                # Ritorna marker che verrà processato in bot.py
+                return f"__MOVEMENT__:consumo:{quantity}:{wine_name}"
+        
+        # Cerca pattern rifornimento
+        for pattern in rifornimento_patterns:
+            match = re.search(pattern, prompt_lower)
+            if match:
+                quantity = int(match.group(1))
+                wine_name = match.group(2).strip()
+                logger.info(f"[AI-MOVEMENT] Rilevato rifornimento: {quantity} {wine_name}")
+                # Ritorna marker che verrà processato in bot.py
+                return f"__MOVEMENT__:rifornimento:{quantity}:{wine_name}"
+        
+        return None  # Nessun movimento rilevato
+        
+    except Exception as e:
+        logger.error(f"[AI-MOVEMENT] Errore rilevamento movimento: {e}")
+        return None  # In caso di errore, passa all'AI normale
+
+
+async def _process_movement_async(telegram_id: int, wine_name: str, movement_type: str, quantity: int) -> str:
+    """
+    Processa movimento in modo asincrono.
+    Usato quando l'AI rileva un movimento direttamente dal prompt.
+    """
+    try:
+        from .processor_client import processor_client
+        
+        # Recupera business_name
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            return "❌ **Errore**: Nome locale non trovato.\nCompleta prima l'onboarding con `/start`."
+        
+        business_name = user.business_name
+        
+        # Processa movimento
+        result = await processor_client.process_movement(
+            telegram_id=telegram_id,
+            business_name=business_name,
+            wine_name=wine_name,
+            movement_type=movement_type,
+            quantity=quantity
+        )
+        
+        if result.get('status') == 'success':
+            if movement_type == 'consumo':
+                return (
+                    f"✅ **Consumo registrato**\n\n"
+                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                    f"📉 **Consumate:** {quantity} bottiglie\n\n"
+                    f"💾 **Movimento salvato** nel sistema"
+                )
+            else:
+                return (
+                    f"✅ **Rifornimento registrato**\n\n"
+                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                    f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
+                    f"💾 **Movimento salvato** nel sistema"
+                )
+        else:
+            error_msg = result.get('error', 'Errore sconosciuto')
+            if 'non trovato' in error_msg.lower():
+                return (
+                    f"❌ **Vino non trovato**\n\n"
+                    f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
+                    f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
+                )
+            elif 'insufficiente' in error_msg.lower():
+                return (
+                    f"⚠️ **Quantità insufficiente**\n\n"
+                    f"{error_msg}\n\n"
+                    f"💡 Verifica la quantità o aggiorna l'inventario."
+                )
+            else:
+                return f"❌ **Errore durante l'aggiornamento**\n\n{error_msg[:200]}\n\nRiprova più tardi."
+                
+    except Exception as e:
+        logger.error(f"[AI-MOVEMENT] Errore processamento movimento: {e}")
+        return f"❌ **Errore durante il processamento**\n\nErrore: {str(e)[:200]}\n\nRiprova più tardi."
+
+
 def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     """Genera risposta AI con accesso ai dati utente."""
     logger.info(f"=== DEBUG OPENAI ===")
@@ -33,6 +164,13 @@ def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     if not prompt or not prompt.strip():
         logger.warning("Prompt vuoto ricevuto")
         return "⚠️ Messaggio vuoto ricevuto. Prova a scrivere qualcosa!"
+    
+    # Rileva movimenti inventario PRIMA di chiamare l'AI
+    # Se riconosce un movimento, ritorna un marker speciale che il bot.py interpreterà
+    if telegram_id:
+        movement_marker = _check_and_process_movement(prompt, telegram_id)
+        if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
+            return movement_marker  # Ritorna marker che verrà processato in bot.py
     
     try:
         # Prepara il contesto utente se disponibile

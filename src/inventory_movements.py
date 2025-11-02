@@ -52,13 +52,19 @@ class InventoryMovementManager:
         telegram_id = user.id
         message_text = update.message.text.lower().strip()
         
-        logger.info(f"Checking movement patterns for message: {message_text}")
+        logger.info(f"[MOVEMENT] Checking movement patterns for message: {message_text}")
         
         # Verifica se l'onboarding è completato
         user_db = db_manager.get_user_by_telegram_id(telegram_id)
-        if not user_db or not user_db.onboarding_completed:
-            logger.debug(f"User {telegram_id} onboarding not completed, skipping movement check")
+        if not user_db:
+            logger.warning(f"[MOVEMENT] User {telegram_id} not found in database, skipping movement check")
             return False
+        
+        if not user_db.onboarding_completed:
+            logger.info(f"[MOVEMENT] User {telegram_id} onboarding not completed (onboarding_completed={user_db.onboarding_completed}), skipping movement check")
+            return False
+        
+        logger.info(f"[MOVEMENT] User {telegram_id} onboarding completed, checking patterns...")
         
         # Cerca pattern di consumo
         for pattern in self.consumo_patterns:
