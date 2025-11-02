@@ -247,6 +247,17 @@ class NewOnboardingManager:
             result = await processor_client.create_tables(telegram_id, business_name)
             
             if result.get('status') == 'success':
+                # SALVA business_name nel database utente subito dopo la creazione delle tabelle
+                success = db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    business_name=business_name
+                )
+                
+                if not success:
+                    logger.warning(f"Impossibile salvare business_name per {telegram_id}, ma le tabelle sono state create")
+                else:
+                    logger.info(f"Business name '{business_name}' salvato nel database per {telegram_id}")
+                
                 await update.message.reply_text(
                     f"✅ **Database configurato!**\n\n"
                     f"📋 Ora ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
