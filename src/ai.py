@@ -263,6 +263,135 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
         return f"❌ **Errore durante il processamento**\n\nErrore: {str(e)[:200]}\n\nRiprova più tardi."
 
 
+def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: list) -> str:
+    """
+    Genera risposte pre-formattate colorate per domande specifiche sui vini.
+    Bypassa AI per risposte immediate e ben formattate.
+    """
+    prompt_lower = prompt.lower().strip()
+    
+    # Pattern per "quanti/quante X ho"
+    quantity_patterns = [
+        r'quanti (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
+        r'quante (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
+        r'quanti bottiglie? di (.+?) (?:ho|hai|ci sono)',
+        r'quante bottiglie? di (.+?) (?:ho|hai|ci sono)',
+    ]
+    
+    # Pattern per "quanto vendo/vendi/costa X"
+    price_patterns = [
+        r'a quanto (?:vendo|vendi|costano|prezzo) (.+?)',
+        r'quanto (?:costa|costano|vendo|vendi) (.+?)',
+        r'prezzo (.+?)',
+        r'prezzo di vendita (.+?)',
+    ]
+    
+    # Pattern per "info/dettagli/tutto su X"
+    info_patterns = [
+        r'dimmi (?:tutto|tutte|tutta) (?:su|del|dello|della|sul) (.+?)',
+        r'(?:informazioni|dettagli|info) (?:su|del|dello|della|sul) (.+?)',
+        r'cosa sai (?:su|del|dello|della|sul) (.+?)',
+    ]
+    
+    # Se non ci sono vini trovati, passa all'AI
+    if not found_wines:
+        return None  # Passa all'AI normale
+    
+    wine = found_wines[0]  # Prendi il primo vino (più rilevante)
+    
+    # Controlla pattern "quanti X ho"
+    for pattern in quantity_patterns:
+        if re.search(pattern, prompt_lower):
+            if wine.quantity is not None:
+                return (
+                    f"🍷 **{wine.name}**\n"
+                    f"{'━' * 30}\n"
+                    f"📦 **In cantina hai:** {wine.quantity} bottiglie\n"
+                    f"{'━' * 30}"
+                )
+            else:
+                return (
+                    f"🍷 **{wine.name}**\n"
+                    f"{'━' * 30}\n"
+                    f"❓ **Quantità non disponibile**\n"
+                    f"💡 Se vuoi, posso aggiungerla all'inventario!\n"
+                    f"{'━' * 30}"
+                )
+    
+    # Controlla pattern "quanto vendo X"
+    for pattern in price_patterns:
+        if re.search(pattern, prompt_lower):
+            response_parts = [f"🍷 **{wine.name}**", "━" * 30]
+            
+            if wine.selling_price:
+                response_parts.append(f"💰 **Prezzo vendita:** €{wine.selling_price:.2f}")
+            else:
+                response_parts.append(f"❓ **Prezzo vendita non disponibile**")
+            
+            if wine.cost_price:
+                response_parts.append(f"💵 **Prezzo acquisto:** €{wine.cost_price:.2f}")
+                if wine.selling_price:
+                    margin = wine.selling_price - wine.cost_price
+                    margin_pct = (margin / wine.cost_price) * 100
+                    response_parts.append(f"📊 **Margine:** €{margin:.2f} ({margin_pct:.1f}%)")
+            
+            response_parts.append("━" * 30)
+            return "\n".join(response_parts)
+    
+    # Controlla pattern "info/dettagli su X"
+    for pattern in info_patterns:
+        if re.search(pattern, prompt_lower):
+            response_parts = [f"🍷 **{wine.name}**", "━" * 30]
+            
+            if wine.producer:
+                response_parts.append(f"🏭 **Produttore:** {wine.producer}")
+            
+            if wine.region:
+                location = wine.region
+                if wine.country:
+                    location += f", {wine.country}"
+                response_parts.append(f"📍 **Regione:** {location}")
+            elif wine.country:
+                response_parts.append(f"🇮🇹 **Paese:** {wine.country}")
+            
+            if wine.vintage:
+                response_parts.append(f"📅 **Annata:** {wine.vintage}")
+            
+            if wine.grape_variety:
+                response_parts.append(f"🍇 **Vitigno:** {wine.grape_variety}")
+            
+            if wine.quantity is not None:
+                response_parts.append(f"📦 **Quantità:** {wine.quantity} bottiglie")
+            
+            if wine.wine_type:
+                type_emoji = {"rosso": "🔴", "bianco": "⚪", "rosato": "🩷", "spumante": "🍾"}.get(wine.wine_type.lower(), "🍷")
+                response_parts.append(f"{type_emoji} **Tipo:** {wine.wine_type.capitalize()}")
+            
+            if wine.classification:
+                response_parts.append(f"⭐ **Classificazione:** {wine.classification}")
+            
+            if wine.selling_price:
+                response_parts.append(f"💰 **Prezzo vendita:** €{wine.selling_price:.2f}")
+            
+            if wine.cost_price:
+                response_parts.append(f"💵 **Prezzo acquisto:** €{wine.cost_price:.2f}")
+            
+            if wine.alcohol_content:
+                response_parts.append(f"🍾 **Gradazione:** {wine.alcohol_content}% vol")
+            
+            if wine.description:
+                response_parts.append(f"📝 **Descrizione:** {wine.description}")
+            
+            if wine.notes:
+                response_parts.append(f"💬 **Note:** {wine.notes}")
+            
+            response_parts.append("━" * 30)
+            return "\n".join(response_parts)
+    
+    # Se nessun pattern match, passa all'AI
+    return None
+
+
 def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     """Genera risposta AI con accesso ai dati utente."""
     logger.info(f"=== DEBUG OPENAI ===")
@@ -336,6 +465,13 @@ INVENTARIO ATTUALE:
                     if wine_search_term:
                         found_wines = db_manager.search_wines(telegram_id, wine_search_term, limit=5)
                         if found_wines:
+                            # Prova a generare risposta pre-formattata (bypass AI per domande specifiche)
+                            formatted_response = _format_wine_response_directly(prompt, telegram_id, found_wines)
+                            if formatted_response:
+                                logger.info(f"[FORMATTED] Risposta pre-formattata generata per domanda specifica")
+                                return formatted_response
+                            
+                            # Se non è una domanda specifica, passa info all'AI nel contesto
                             specific_wine_info = "\n\nVINI TROVATI NEL DATABASE PER LA RICERCA:\n"
                             for wine in found_wines:
                                 info_parts = [f"- {wine.name}"]
@@ -356,6 +492,8 @@ INVENTARIO ATTUALE:
                                 specific_wine_info += " | ".join(info_parts) + "\n"
                         else:
                             specific_wine_info = f"\n\nNESSUN VINO TROVATO nel database per '{wine_search_term}'\n"
+                            # Anche se non trovato, passa all'AI per gestire il messaggio
+                            # (AI dirà "non ho questa informazione" in modo più naturale)
                     
                     # Ottieni statistiche inventario (non tutti i vini)
                     wines = db_manager.get_user_wines(telegram_id)
