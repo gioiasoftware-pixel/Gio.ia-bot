@@ -47,3 +47,4 @@ Quando avvii il bot, dovresti vedere nel log:
 Se vedi questo, il bot è configurato correttamente! 🎉
 
 
+

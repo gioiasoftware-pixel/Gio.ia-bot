@@ -98,3 +98,4 @@ Telegram → Bot (.env → PROCESSOR_URL) → Processor → Database
 - Il processor deve essere raggiungibile dal bot (stessa rete locale per test, pubblico per produzione)
 
 
+

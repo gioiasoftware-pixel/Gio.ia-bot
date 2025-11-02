@@ -110,7 +110,15 @@ class ProcessorClient:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(f"{self.base_url}/status/{job_id}") as response:
                     if response.status == 200:
-                        return await response.json()
+                        try:
+                            return await response.json()
+                        except Exception as json_error:
+                            error_text = await response.text()
+                            logger.error(f"Error parsing JSON response for job {job_id}: {json_error}, response: {error_text[:500]}")
+                            return {
+                                "status": "error",
+                                "error": f"Invalid JSON response: {str(json_error)}"
+                            }
                     elif response.status == 404:
                         return {
                             "status": "error",
@@ -118,15 +126,28 @@ class ProcessorClient:
                         }
                     else:
                         error_text = await response.text()
+                        logger.error(f"Error getting job status HTTP {response.status} for job {job_id}: {error_text[:500]}")
                         return {
                             "status": "error",
                             "error": f"HTTP {response.status}: {error_text[:200]}"
                         }
-        except Exception as e:
-            logger.error(f"Error getting job status: {e}")
+        except asyncio.TimeoutError as e:
+            logger.error(f"Timeout getting job status for {job_id}: {e}")
             return {
                 "status": "error",
-                "error": str(e)
+                "error": f"Timeout connecting to processor (job {job_id})"
+            }
+        except aiohttp.ClientError as e:
+            logger.error(f"Client error getting job status for {job_id}: {e}")
+            return {
+                "status": "error",
+                "error": f"Connection error: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"Error getting job status for {job_id}: {type(e).__name__}: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "error": f"Unexpected error: {str(e)}"
             }
     
     async def wait_for_job_completion(self, job_id: str, max_wait_seconds: int = 3600, 
@@ -144,6 +165,7 @@ class ProcessorClient:
             # Controlla timeout
             elapsed = time.time() - start_time
             if elapsed > max_wait_seconds:
+                logger.error(f"Job {job_id} timeout after {max_wait_seconds} seconds")
                 return {
                     "status": "error",
                     "error": f"Job timeout dopo {max_wait_seconds} secondi",
@@ -151,21 +173,53 @@ class ProcessorClient:
                 }
             
             # Poll status
-            status = await self.get_job_status(job_id)
-            
-            if status.get("status") == "completed":
-                # Job completato - ritorna risultato
-                result = status.get("result", {})
-                logger.info(f"Job {job_id} completed: {result.get('saved_wines', 0)} wines saved")
-                return result
-            elif status.get("status") == "error":
-                # Job errore
+            try:
+                status = await self.get_job_status(job_id)
+            except Exception as e:
+                logger.error(f"Exception calling get_job_status for {job_id}: {e}", exc_info=True)
                 return {
                     "status": "error",
-                    "error": status.get("error", "Unknown error"),
+                    "error": f"Error polling job status: {str(e)}",
                     "job_id": job_id
                 }
-            elif status.get("status") in ["pending", "processing"]:
+            
+            # Verifica che status sia un dict valido
+            if not isinstance(status, dict):
+                logger.error(f"Invalid status response for job {job_id}: {type(status)} = {status}")
+                return {
+                    "status": "error",
+                    "error": "Invalid response format from processor",
+                    "job_id": job_id
+                }
+            
+            job_status = status.get("status")
+            
+            if job_status == "completed":
+                # Job completato - ritorna risultato
+                result = status.get("result", {})
+                if not isinstance(result, dict):
+                    logger.error(f"Invalid result format for job {job_id}: {type(result)} = {result}")
+                    # Prova a costruire risultato dai campi diretti di status
+                    result = {
+                        "status": "success",
+                        "saved_wines": status.get("saved_wines", 0),
+                        "total_wines": status.get("total_wines", 0),
+                        "warning_count": status.get("warning_count", 0),
+                        "error_count": status.get("error_count", 0)
+                    }
+                
+                logger.info(f"Job {job_id} completed: {result.get('saved_wines', 0)} wines saved")
+                return result
+            elif job_status == "error":
+                # Job errore
+                error_msg = status.get("error", "Unknown error")
+                logger.error(f"Job {job_id} error: {error_msg}")
+                return {
+                    "status": "error",
+                    "error": error_msg,
+                    "job_id": job_id
+                }
+            elif job_status in ["pending", "processing"]:
                 # Ancora in elaborazione - mostra progress
                 progress = status.get("progress_percent", 0)
                 processed = status.get("processed_wines", 0)
@@ -173,8 +227,8 @@ class ProcessorClient:
                 logger.info(f"Job {job_id} progress: {progress}% ({processed}/{total} wines)")
                 await asyncio.sleep(poll_interval)
             else:
-                # Stato sconosciuto
-                logger.warning(f"Job {job_id} unknown status: {status.get('status')}")
+                # Stato sconosciuto - log dettagliato e continua polling
+                logger.warning(f"Job {job_id} unknown status: {job_status}, full response: {status}")
                 await asyncio.sleep(poll_interval)
     
     async def get_status(self, telegram_id: int) -> Dict[str, Any]:

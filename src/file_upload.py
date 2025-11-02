@@ -172,9 +172,18 @@ class FileUploadManager:
                 await update.message.reply_text(message, parse_mode='Markdown')
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
+                if not error_msg or error_msg == '...':
+                    error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
+                
+                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
                 await update.message.reply_text(
                     f"⚠️ **Errore elaborazione inventario**\n\n"
-                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Dettagli: {error_msg[:200]}\n\n"
+                    f"💡 **Possibili cause:**\n"
+                    f"• Processor non raggiungibile\n"
+                    f"• Timeout durante l'elaborazione\n"
+                    f"• Problema di connessione\n\n"
+                    f"📋 **Job ID:** `{job_id}`\n\n"
                     f"Riprova più tardi o contatta il supporto."
                 )
             
@@ -321,9 +330,18 @@ class FileUploadManager:
                 await update.message.reply_text(message, parse_mode='Markdown')
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
+                if not error_msg or error_msg == '...':
+                    error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
+                
+                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
                 await update.message.reply_text(
                     f"⚠️ **Errore elaborazione OCR**\n\n"
-                    f"Dettagli: {error_msg[:200]}...\n\n"
+                    f"Dettagli: {error_msg[:200]}\n\n"
+                    f"💡 **Possibili cause:**\n"
+                    f"• Processor non raggiungibile\n"
+                    f"• Timeout durante l'elaborazione\n"
+                    f"• Problema di connessione\n\n"
+                    f"📋 **Job ID:** `{job_id}`\n\n"
                     f"Riprova più tardi o contatta il supporto."
                 )
             
