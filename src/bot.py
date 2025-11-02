@@ -215,7 +215,7 @@ async def chat_handler(update, context):
             return
         
         # Gestisci nuovo onboarding se in corso
-        if new_onboarding_manager.handle_onboarding_response(update, context):
+        if await new_onboarding_manager.handle_onboarding_response(update, context):
             return
         
         # Gestisci onboarding guidato dall'AI
@@ -416,7 +416,7 @@ async def handle_document_with_onboarding(update, context):
             return
         
         # Processa con nuovo onboarding
-        new_onboarding_manager.handle_file_upload_during_onboarding(
+        await new_onboarding_manager.handle_file_upload_during_onboarding(
             update, context, file_type, file_bytes
         )
     elif context.user_data.get('onboarding_step') == 'ai_guided':
@@ -440,7 +440,7 @@ async def handle_photo_with_onboarding(update, context):
         file_bytes = await file_data.download_as_bytearray()
         
         # Processa con nuovo onboarding
-        new_onboarding_manager.handle_file_upload_during_onboarding(
+        await new_onboarding_manager.handle_file_upload_during_onboarding(
             update, context, 'photo', file_bytes
         )
     elif context.user_data.get('onboarding_step') == 'ai_guided':

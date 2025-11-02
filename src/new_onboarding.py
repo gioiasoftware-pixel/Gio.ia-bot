@@ -52,7 +52,7 @@ class NewOnboardingManager:
         # Avvia onboarding guidato dall'AI
         await self._start_ai_guided_onboarding(update, context)
     
-    def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
+    async def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
         """Invia un step dell'onboarding"""
         step_data = self.onboarding_steps[step]
         question = step_data['question']
@@ -61,9 +61,9 @@ class NewOnboardingManager:
         context.user_data['onboarding_step'] = step
         
         # Invia messaggio
-        update.message.reply_text(question, parse_mode='Markdown')
+        await update.message.reply_text(question, parse_mode='Markdown')
     
-    def handle_onboarding_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def handle_onboarding_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce le risposte durante l'onboarding"""
         if 'onboarding_step' not in context.user_data:
             return False
@@ -77,7 +77,7 @@ class NewOnboardingManager:
             context.user_data['onboarding_data']['username'] = username
             
             # Passa al prossimo step
-            self._send_onboarding_step(update, context, 'restaurant_name')
+            await self._send_onboarding_step(update, context, 'restaurant_name')
             return True
         
         elif current_step == 'restaurant_name':
@@ -86,12 +86,12 @@ class NewOnboardingManager:
             context.user_data['onboarding_data']['restaurant_name'] = restaurant_name
             
             # Completa l'onboarding
-            self._complete_onboarding(update, context)
+            await self._complete_onboarding(update, context)
             return True
         
         return False
     
-    def handle_file_upload_during_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+    async def handle_file_upload_during_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                                            file_type: str, file_data: bytes) -> bool:
         """Gestisce l'upload di file durante l'onboarding"""
         if context.user_data.get('onboarding_step') != 'upload_file':
@@ -109,22 +109,22 @@ class NewOnboardingManager:
                 f"• File processato correttamente\n\n"
                 f"🎯 **Prossimo step:** Configurazione profilo utente"
             )
-            update.message.reply_text(success_message, parse_mode='Markdown')
+            await update.message.reply_text(success_message, parse_mode='Markdown')
             
             # Passa al prossimo step
-            self._send_onboarding_step(update, context, 'username')
+            await self._send_onboarding_step(update, context, 'username')
             return True
             
         except Exception as e:
             logger.error(f"Errore processamento file durante onboarding: {e}")
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ **Errore durante il processamento**\n\n"
                 "Si è verificato un errore durante l'elaborazione del file.\n"
                 "Riprova con un file valido."
             )
             return True
     
-    def _complete_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _complete_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Completa il processo di onboarding"""
         user = update.effective_user
         telegram_id = user.id
@@ -140,7 +140,7 @@ class NewOnboardingManager:
             )
             
             if not success:
-                update.message.reply_text("❌ Errore durante il salvataggio. Riprova con `/start`.")
+                await update.message.reply_text("❌ Errore durante il salvataggio. Riprova con `/start`.")
                 return
             
             # I vini sono già stati salvati dal processor
@@ -163,7 +163,7 @@ class NewOnboardingManager:
                 f"💡 **Suggerimento:** Comunica i movimenti a fine giornata o in tempo reale per tenere l'inventario sempre aggiornato!"
             )
             
-            update.message.reply_text(completion_text, parse_mode='Markdown')
+            await update.message.reply_text(completion_text, parse_mode='Markdown')
             
             # Pulisci i dati temporanei
             context.user_data.pop('onboarding_step', None)
@@ -176,7 +176,7 @@ class NewOnboardingManager:
             
         except Exception as e:
             logger.error(f"Errore completamento onboarding: {e}")
-            update.message.reply_text("❌ Errore durante il completamento. Riprova con `/start`.")
+            await update.message.reply_text("❌ Errore durante il completamento. Riprova con `/start`.")
     
     async def _start_ai_guided_onboarding(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Avvia onboarding guidato dall'AI"""
