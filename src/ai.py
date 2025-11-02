@@ -20,6 +20,94 @@ os.environ.pop('all_proxy', None)
 logger = logging.getLogger(__name__)
 
 
+def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
+    """
+    Usa OpenAI per rilevare se il messaggio è un movimento inventario quando regex non match.
+    Gestisce variazioni linguistiche naturali come "mi sono arrivati", "arrivati", ecc.
+    """
+    try:
+        import json
+        import openai
+        
+        # Usa le variabili già definite nel modulo
+        if not OPENAI_API_KEY:
+            return None
+        
+        # Verifica condizioni base (stesse del check regex)
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name or user.business_name == "Upload Manuale":
+            return None
+        
+        user_wines = db_manager.get_user_wines(telegram_id)
+        if not user_wines or len(user_wines) == 0:
+            return None
+        
+        # Prompt specifico per rilevare movimenti
+        movement_detection_prompt = f"""Analizza questo messaggio e determina se indica un movimento inventario (consumo o rifornimento di vini).
+
+MESSAGGIO: "{prompt}"
+
+Un movimento può essere espresso in molti modi:
+- Rifornimento: "mi sono arrivati X vini", "arrivati X", "sono arrivati X", "ho ricevuto X", "comprato X", ecc.
+- Consumo: "ho venduto X", "ho consumato X", "ho bevuto X", "venduto X", ecc.
+
+Rispondi SOLO con un JSON valido in questo formato (senza testo aggiuntivo):
+{{
+    "is_movement": true o false,
+    "type": "consumo" o "rifornimento" o null,
+    "quantity": numero intero o null,
+    "wine_name": "nome del vino" o null
+}}
+
+Esempi:
+- "mi sono arrivati 6 gavi" → {{"is_movement": true, "type": "rifornimento", "quantity": 6, "wine_name": "gavi"}}
+- "ho consumato 5 sassicaia" → {{"is_movement": true, "type": "consumo", "quantity": 5, "wine_name": "sassicaia"}}
+- "quanti vini ho?" → {{"is_movement": false, "type": null, "quantity": null, "wine_name": null}}
+"""
+        
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "Sei un analizzatore di messaggi. Rispondi SOLO con JSON valido, senza testo aggiuntivo."},
+                {"role": "user", "content": movement_detection_prompt}
+            ],
+            max_tokens=150,
+            temperature=0.1  # Bassa temperatura per risposte più deterministiche
+        )
+        
+        if not response.choices or not response.choices[0].message.content:
+            return None
+        
+        result_text = response.choices[0].message.content.strip()
+        logger.info(f"[AI-MOVEMENT] Risposta AI rilevamento: {result_text}")
+        
+        # Estrai JSON dalla risposta (potrebbe essere in un code block)
+        json_text = result_text
+        if "```json" in json_text:
+            json_text = json_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_text:
+            json_text = json_text.split("```")[1].split("```")[0].strip()
+        
+        result = json.loads(json_text)
+        
+        if result.get("is_movement") and result.get("type") and result.get("quantity") and result.get("wine_name"):
+            movement_type = result["type"]
+            quantity = int(result["quantity"])
+            wine_name = result["wine_name"].strip()
+            logger.info(f"[AI-MOVEMENT] Movimento rilevato da AI: {movement_type} {quantity} {wine_name}")
+            return f"__MOVEMENT__:{movement_type}:{quantity}:{wine_name}"
+        
+        return None
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"[AI-MOVEMENT] Errore parsing JSON da AI: {e}, risposta: {result_text if 'result_text' in locals() else 'N/A'}")
+        return None
+    except Exception as e:
+        logger.error(f"[AI-MOVEMENT] Errore chiamata AI per rilevamento movimento: {e}")
+        return None
+
+
 def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
     """
     Rileva se il prompt contiene un movimento inventario (consumo/rifornimento).
@@ -93,9 +181,16 @@ def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
             if match:
                 quantity = int(match.group(1))
                 wine_name = match.group(2).strip()
-                logger.info(f"[AI-MOVEMENT] Rilevato rifornimento: {quantity} {wine_name}")
+                logger.info(f"[AI-MOVEMENT] Rilevato rifornimento (regex): {quantity} {wine_name}")
                 # Ritorna marker che verrà processato in bot.py
                 return f"__MOVEMENT__:rifornimento:{quantity}:{wine_name}"
+        
+        # Se regex non ha matchato, usa AI per rilevare movimenti con variazioni linguistiche
+        logger.info(f"[AI-MOVEMENT] Regex non matchato, provo con AI per: {prompt_lower[:50]}")
+        ai_movement_result = _check_movement_with_ai(prompt, telegram_id)
+        if ai_movement_result:
+            logger.info(f"[AI-MOVEMENT] Rilevato movimento tramite AI: {ai_movement_result}")
+            return ai_movement_result
         
         return None  # Nessun movimento rilevato
         
