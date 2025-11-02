@@ -133,11 +133,9 @@ class ProcessorClient:
                             "error": f"HTTP {response.status}: {error_text[:200]}"
                         }
         except asyncio.TimeoutError as e:
-            logger.error(f"Timeout getting job status for {job_id}: {e}")
-            return {
-                "status": "error",
-                "error": f"Timeout connecting to processor (job {job_id})"
-            }
+            logger.warning(f"Timeout getting job status for {job_id}: {e} (this may be transient, will retry)")
+            # Non restituire errore immediato - il retry logic in wait_for_job_completion gestirà
+            raise  # Rilancia l'eccezione per gestirla nel retry logic
         except aiohttp.ClientError as e:
             logger.error(f"Client error getting job status for {job_id}: {e}")
             return {
@@ -173,7 +171,40 @@ class ProcessorClient:
             # Controlla timeout globale
             elapsed = time.time() - start_time
             if elapsed > max_wait_seconds:
-                logger.error(f"Job {job_id} timeout after {max_wait_seconds} seconds")
+                # Prima di dare timeout, verifica una volta finale lo stato del job
+                # Il job potrebbe essersi completato nel frattempo
+                logger.info(f"Job {job_id} timeout after {max_wait_seconds} seconds, checking final status...")
+                try:
+                    final_status = await self.get_job_status(job_id)
+                    if isinstance(final_status, dict):
+                        final_job_status = final_status.get("status")
+                        if final_job_status == "completed":
+                            # Job completato - ritorna risultato anche se abbiamo superato il timeout
+                            logger.info(f"Job {job_id} completed after timeout, returning success")
+                            result = final_status.get("result", {})
+                            if not isinstance(result, dict):
+                                result = {
+                                    "status": "success",
+                                    "saved_wines": final_status.get("saved_wines", 0),
+                                    "total_wines": final_status.get("total_wines", 0),
+                                    "warning_count": final_status.get("warning_count", 0),
+                                    "error_count": final_status.get("error_count", 0)
+                                }
+                            return result
+                        elif final_job_status == "error":
+                            # Job errore - ritorna errore del job
+                            error_msg = final_status.get("error", "Unknown error")
+                            logger.info(f"Job {job_id} errored after timeout: {error_msg}")
+                            return {
+                                "status": "error",
+                                "error": error_msg,
+                                "job_id": job_id
+                            }
+                except Exception as final_check_error:
+                    logger.warning(f"Error checking final status for job {job_id}: {final_check_error}")
+                
+                # Se il job è ancora in pending/processing o il check finale fallisce, dai timeout
+                logger.error(f"Job {job_id} timeout after {max_wait_seconds} seconds (final status check failed or still processing)")
                 return {
                     "status": "error",
                     "error": f"Job timeout dopo {max_wait_seconds} secondi",
