@@ -5,7 +5,8 @@ import logging
 from typing import List, Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from .database import db_manager, Wine
+from .database_async import async_db_manager
+from .database_async import Wine  # Solo per modello tipo
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +23,18 @@ class InventoryManager:
             "DOCG", "DOC", "IGT", "VdT", "IGP", "AOC", "AOP", "VQA", "Altro"
         ]
     
-    def show_inventory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def show_inventory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Mostra l'inventario dell'utente"""
         user = update.effective_user
         telegram_id = user.id
         
-        wines = db_manager.get_user_wines(telegram_id)
-        stats = db_manager.get_user_stats(telegram_id)
+        wines = await async_db_manager.get_user_wines(telegram_id)
+        # Calcola stats localmente
+        stats = {
+            'total_wines': len(wines),
+            'total_quantity': sum(w.quantity or 0 for w in wines),
+            'low_stock_count': len([w for w in wines if (w.quantity or 0) <= (getattr(w, 'min_quantity', 0) or 0)])
+        }
         
         if not wines:
             message = (
@@ -36,7 +42,7 @@ class InventoryManager:
                 "💡 Inizia aggiungendo il tuo primo vino con il comando `/aggiungi`\n"
                 "o chiedi all'AI di aiutarti a gestire l'inventario!"
             )
-            update.message.reply_text(message, parse_mode='Markdown')
+            await update.message.reply_text(message, parse_mode='Markdown')
             return
         
         # Header con statistiche
@@ -49,7 +55,9 @@ class InventoryManager:
         # Lista vini
         wine_list = []
         for i, wine in enumerate(wines[:10], 1):  # Mostra max 10 vini
-            status_emoji = "⚠️" if wine.quantity <= wine.min_quantity else "✅"
+            min_qty = getattr(wine, 'min_quantity', 0) or 0
+            qty = wine.quantity or 0
+            status_emoji = "⚠️" if qty <= min_qty else "✅"
             wine_info = (
                 f"{i}. {status_emoji} **{wine.name}**\n"
                 f"   🏷️ {wine.producer or 'Produttore sconosciuto'}\n"
@@ -72,9 +80,9 @@ class InventoryManager:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
-    def start_add_wine(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def start_add_wine(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Avvia il processo di aggiunta vino"""
         context.user_data['adding_wine'] = True
         context.user_data['wine_data'] = {}
@@ -84,9 +92,9 @@ class InventoryManager:
             "📝 Iniziamo con il nome del vino:\n"
             "Esempio: 'Chianti Classico' o 'Barolo 2018'"
         )
-        update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message, parse_mode='Markdown')
     
-    def handle_wine_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def handle_wine_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce l'inserimento dati vino"""
         if not context.user_data.get('adding_wine', False):
             return False
@@ -99,7 +107,7 @@ class InventoryManager:
             context.user_data['wine_data'] = wine_data
             context.user_data['wine_step'] = 'producer'
             
-            update.message.reply_text(
+            await update.message.reply_text(
                 "🏭 **Produttore:**\n"
                 "Esempio: 'Antinori' o 'Gaja'"
             )
@@ -110,7 +118,7 @@ class InventoryManager:
             context.user_data['wine_data'] = wine_data
             context.user_data['wine_step'] = 'vintage'
             
-            update.message.reply_text(
+            await update.message.reply_text(
                 "📅 **Annata:**\n"
                 "Esempio: '2020' o 'N/A' se non specificata"
             )
@@ -140,7 +148,7 @@ class InventoryManager:
                 keyboard.append(row)
             
             reply_markup = InlineKeyboardMarkup(keyboard)
-            update.message.reply_text(
+            await update.message.reply_text(
                 "🍷 **Tipo di vino:**",
                 reply_markup=reply_markup
             )
@@ -152,19 +160,19 @@ class InventoryManager:
                 wine_data['quantity'] = quantity
                 context.user_data['wine_data'] = wine_data
                 
-                # Completa l'aggiunta
-                self._complete_wine_addition(update, context)
+                # Completa l'aggiunta - ASYNC
+                await self._complete_wine_addition(update, context)
                 return True
             except ValueError:
-                update.message.reply_text("❌ Inserisci un numero valido per la quantità.")
+                await update.message.reply_text("❌ Inserisci un numero valido per la quantità.")
                 return True
         
         return False
     
-    def handle_wine_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def handle_wine_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce le callback per l'aggiunta vino"""
         query = update.callback_query
-        query.answer()
+        await query.answer()
         
         if not context.user_data.get('adding_wine', False):
             return False
@@ -179,7 +187,7 @@ class InventoryManager:
             context.user_data['wine_data'] = wine_data
             context.user_data['wine_step'] = 'quantity'
             
-            query.edit_message_text(
+            await query.edit_message_text(
                 "📦 **Quantità in magazzino:**\n"
                 "Quante bottiglie hai di questo vino?"
             )
@@ -187,14 +195,14 @@ class InventoryManager:
         
         return False
     
-    def _complete_wine_addition(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _complete_wine_addition(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Completa l'aggiunta del vino"""
         user = update.effective_user
         telegram_id = user.id
         wine_data = context.user_data.get('wine_data', {})
         
-        # Aggiungi il vino al database
-        wine = db_manager.add_wine(telegram_id, wine_data)
+        # Aggiungi il vino al database - ASYNC
+        wine = await async_db_manager.add_wine(telegram_id, wine_data)
         
         if wine:
             success_message = (
@@ -206,25 +214,25 @@ class InventoryManager:
                 f"📦 **Quantità:** {wine.quantity} bottiglie\n\n"
                 "💡 Usa `/inventario` per vedere il tuo inventario completo!"
             )
-            update.message.reply_text(success_message, parse_mode='Markdown')
+            await update.message.reply_text(success_message, parse_mode='Markdown')
         else:
-            update.message.reply_text("❌ Errore durante l'aggiunta del vino. Riprova.")
+            await update.message.reply_text("❌ Errore durante l'aggiunta del vino. Riprova.")
         
         # Pulisci i dati temporanei
         context.user_data.pop('adding_wine', None)
         context.user_data.pop('wine_data', None)
         context.user_data.pop('wine_step', None)
     
-    def show_low_stock(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def show_low_stock(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Mostra vini con scorte basse"""
         user = update.effective_user
         telegram_id = user.id
         
-        low_stock_wines = db_manager.get_low_stock_wines(telegram_id)
+        low_stock_wines = await async_db_manager.get_low_stock_wines(telegram_id)
         
         if not low_stock_wines:
             message = "✅ **Tutte le scorte sono a posto!**\n\nNon hai vini con scorte basse."
-            update.message.reply_text(message, parse_mode='Markdown')
+            await update.message.reply_text(message, parse_mode='Markdown')
             return
         
         message = f"⚠️ **Scorte basse - {len(low_stock_wines)} vini**\n\n"
@@ -237,12 +245,16 @@ class InventoryManager:
             )
         
         message += "💡 Considera di riordinare questi vini!"
-        update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message, parse_mode='Markdown')
     
-    def get_inventory_summary(self, telegram_id: int) -> Dict[str, Any]:
+    async def get_inventory_summary(self, telegram_id: int) -> Dict[str, Any]:
         """Ottieni un riassunto dell'inventario per l'AI"""
-        wines = db_manager.get_user_wines(telegram_id)
-        stats = db_manager.get_user_stats(telegram_id)
+        wines = await async_db_manager.get_user_wines(telegram_id)
+        stats = {
+            'total_wines': len(wines),
+            'total_quantity': sum(w.quantity or 0 for w in wines),
+            'low_stock_count': len([w for w in wines if (w.quantity or 0) <= (getattr(w, 'min_quantity', 0) or 0)])
+        }
         
         wine_summary = []
         for wine in wines:

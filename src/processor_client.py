@@ -52,7 +52,8 @@ class ProcessorClient:
     
     async def process_inventory(self, telegram_id: int, business_name: str, 
                                file_type: str, file_content: bytes, 
-                               file_name: str = "inventario", file_id: str = None) -> Dict[str, Any]:
+                               file_name: str = "inventario", file_id: str = None,
+                               client_msg_id: str = None, correlation_id: str = None) -> Dict[str, Any]:
         """
         Invia file al processor e ritorna job_id.
         L'elaborazione avviene in background - usa get_job_status per verificare progresso.
@@ -66,6 +67,10 @@ class ProcessorClient:
                 form.add_field('file_type', file_type)
                 # Invia file come campo 'file' (nome richiesto dall'endpoint FastAPI)
                 form.add_field('file', file_content, filename=file_name, content_type='application/octet-stream')
+                if client_msg_id:
+                    form.add_field('client_msg_id', client_msg_id)  # Per idempotenza
+                if correlation_id:
+                    form.add_field('correlation_id', correlation_id)  # Per logging
                 
                 logger.info(f"Sending inventory to processor: {telegram_id}, {business_name}, {file_type}, size={len(file_content)} bytes")
                 

@@ -1,0 +1,535 @@
+"""
+Database async per Gio.ia-bot - Gestione utenti e inventario vini (ASYNC)
+"""
+import os
+import logging
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy import select, text as sql_text, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+
+logger = logging.getLogger(__name__)
+
+# Base per i modelli SQLAlchemy
+Base = declarative_base()
+
+# MODELLI (stessi di database.py ma per async)
+class User(Base):
+    """Modello per gli utenti del bot"""
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    username = Column(String(100))
+    first_name = Column(String(100))
+    last_name = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Dati onboarding
+    business_name = Column(String(200))
+    business_type = Column(String(100))
+    location = Column(String(200))
+    phone = Column(String(50))
+    email = Column(String(200))
+    onboarding_completed = Column(Boolean, default=False)
+
+
+class Wine(Base):
+    """Modello per l'inventario vini (per fallback)"""
+    __tablename__ = 'wines'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    name = Column(String(200), nullable=False)
+    producer = Column(String(200))
+    vintage = Column(Integer)
+    grape_variety = Column(String(200))
+    region = Column(String(200))
+    country = Column(String(100))
+    wine_type = Column(String(50))
+    classification = Column(String(100))
+    quantity = Column(Integer, default=0)
+    min_quantity = Column(Integer, default=0)
+    cost_price = Column(Float)
+    selling_price = Column(Float)
+    alcohol_content = Column(Float)
+    description = Column(Text)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# URL DATABASE
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://user:password@localhost/gioia_bot"
+    logger.warning("DATABASE_URL non trovata, usando fallback locale")
+else:
+    logger.info(f"DATABASE_URL trovata: {DATABASE_URL[:20]}...")
+
+# Converte URL Railway in formato SQLAlchemy
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Fix per URL malformate di Railway
+if "port" in DATABASE_URL and not DATABASE_URL.count(":") >= 3:
+    logger.warning("DATABASE_URL malformata, usando fallback")
+    DATABASE_URL = "postgresql://user:password@localhost/gioia_bot"
+
+# Converti a asyncpg
+DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# ENGINE ASYNC
+engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+    max_overflow=0,  # IMPORTANTE: evita superare max_connections
+    pool_pre_ping=True,  # Auto-reconnect
+    echo=False,
+)
+
+# SESSION FACTORY ASYNC
+AsyncSessionLocal = async_sessionmaker(
+    engine,
+    expire_on_commit=False,
+    class_=AsyncSession
+)
+
+async def get_async_session() -> AsyncSession:
+    """Ottieni sessione async"""
+    return AsyncSessionLocal()
+
+
+class AsyncDatabaseManager:
+    """Gestore database async per bot"""
+    
+    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[User]:
+        """Trova utente per Telegram ID"""
+        async with await get_async_session() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            return result.scalar_one_or_none()
+    
+    async def get_all_users(self) -> List[User]:
+        """Ottieni tutti gli utenti"""
+        async with await get_async_session() as session:
+            result = await session.execute(select(User))
+            return list(result.scalars().all())
+    
+    async def create_user(self, telegram_id: int, username: str = None, 
+                         first_name: str = None, last_name: str = None) -> User:
+        """Crea nuovo utente"""
+        async with await get_async_session() as session:
+            user = User(
+                telegram_id=telegram_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            logger.info(f"Nuovo utente creato: {user.telegram_id}")
+            return user
+    
+    async def update_user_onboarding(self, telegram_id: int, **kwargs) -> bool:
+        """Aggiorna onboarding utente"""
+        async with await get_async_session() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                return False
+            
+            for key, value in kwargs.items():
+                if hasattr(user, key):
+                    setattr(user, key, value)
+            
+            user.updated_at = datetime.utcnow()
+            await session.commit()
+            logger.info(f"Onboarding aggiornato per utente {telegram_id}")
+            return True
+    
+    async def get_user_wines(self, telegram_id: int) -> List[Wine]:
+        """Ottieni vini utente da tabelle dinamiche"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                logger.warning(f"User {telegram_id} non trovato o business_name mancante")
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    ORDER BY name
+                """)
+                
+                result = await session.execute(query, {"user_id": user.id})
+                rows = result.fetchall()
+                
+                # Converti le righe in oggetti Wine
+                wines = []
+                for row in rows:
+                    wine_dict = {
+                        'id': row.id,
+                        'user_id': row.user_id,
+                        'name': row.name,
+                        'producer': row.producer,
+                        'vintage': row.vintage,
+                        'grape_variety': row.grape_variety,
+                        'region': row.region,
+                        'country': row.country,
+                        'wine_type': row.wine_type,
+                        'classification': row.classification,
+                        'quantity': row.quantity,
+                        'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                        'cost_price': row.cost_price,
+                        'selling_price': row.selling_price,
+                        'alcohol_content': row.alcohol_content,
+                        'description': row.description,
+                        'notes': row.notes,
+                        'created_at': row.created_at,
+                        'updated_at': row.updated_at
+                    }
+                    
+                    wine = Wine()
+                    for key, value in wine_dict.items():
+                        setattr(wine, key, value)
+                    wines.append(wine)
+                
+                logger.info(f"Recuperati {len(wines)} vini da tabella dinamica per {telegram_id}/{user.business_name}")
+                return wines
+                
+            except Exception as e:
+                logger.error(f"Errore leggendo inventario da tabella dinamica {table_name}: {e}")
+                # Fallback: prova vecchia tabella wines
+                try:
+                    result = await session.execute(
+                        select(Wine).where(Wine.user_id == user.id)
+                    )
+                    return list(result.scalars().all())
+                except:
+                    return []
+    
+    async def search_wines(self, telegram_id: int, search_term: str, limit: int = 10) -> List[Wine]:
+        """
+        Cerca vini con ricerca fuzzy avanzata (async).
+        """
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                logger.warning(f"User {telegram_id} non trovato o business_name mancante")
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                search_term_clean = search_term.strip().lower()
+                search_words = [w.strip() for w in search_term_clean.split() if len(w.strip()) > 2]
+                search_pattern = f"%{search_term_clean}%"
+                
+                search_numeric = None
+                search_float = None
+                try:
+                    search_numeric = int(search_term_clean)
+                except ValueError:
+                    try:
+                        search_float = float(search_term_clean.replace(',', '.'))
+                    except ValueError:
+                        pass
+                
+                query_conditions = [
+                    "name ILIKE :search_pattern",
+                    "producer ILIKE :search_pattern",
+                    "region ILIKE :search_pattern",
+                    "country ILIKE :search_pattern",
+                    "wine_type ILIKE :search_pattern",
+                    "classification ILIKE :search_pattern",
+                    "grape_variety ILIKE :search_pattern"
+                ]
+                
+                if len(search_words) > 1:
+                    for i, word in enumerate(search_words):
+                        query_conditions.extend([
+                            f"name ILIKE :word_{i}",
+                            f"producer ILIKE :word_{i}",
+                            f"region ILIKE :word_{i}",
+                            f"country ILIKE :word_{i}",
+                            f"wine_type ILIKE :word_{i}",
+                            f"classification ILIKE :word_{i}",
+                            f"grape_variety ILIKE :word_{i}"
+                        ])
+                
+                query_params = {
+                    "user_id": user.id,
+                    "search_pattern": search_pattern,
+                    "limit": limit
+                }
+                
+                if len(search_words) > 1:
+                    for i, word in enumerate(search_words):
+                        query_params[f"word_{i}"] = f"%{word}%"
+                
+                if search_numeric is not None:
+                    query_conditions.append("vintage = :search_numeric")
+                    query_params["search_numeric"] = search_numeric
+                
+                if search_float is not None:
+                    query_conditions.append("(ABS(cost_price - :search_float) < 0.01 OR ABS(selling_price - :search_float) < 0.01)")
+                    query_conditions.append("(ABS(alcohol_content - :search_float) < 0.1)")
+                    query_params["search_float"] = search_float
+                
+                query = sql_text(f"""
+                    SELECT *, 
+                        CASE 
+                            WHEN name ILIKE :search_pattern THEN 1
+                            WHEN producer ILIKE :search_pattern THEN 2
+                            ELSE 3
+                        END as match_priority
+                    FROM {table_name} 
+                    WHERE user_id = :user_id
+                    AND ({' OR '.join(query_conditions)})
+                    ORDER BY match_priority ASC, name ASC
+                    LIMIT :limit
+                """)
+                
+                result = await session.execute(query, query_params)
+                rows = result.fetchall()
+                
+                wines = []
+                for row in rows:
+                    wine_dict = {
+                        'id': row.id,
+                        'user_id': row.user_id,
+                        'name': row.name,
+                        'producer': row.producer,
+                        'vintage': row.vintage,
+                        'grape_variety': row.grape_variety,
+                        'region': row.region,
+                        'country': row.country,
+                        'wine_type': row.wine_type,
+                        'classification': row.classification,
+                        'quantity': row.quantity,
+                        'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                        'cost_price': row.cost_price,
+                        'selling_price': row.selling_price,
+                        'alcohol_content': row.alcohol_content,
+                        'description': row.description,
+                        'notes': row.notes,
+                        'created_at': row.created_at,
+                        'updated_at': row.updated_at
+                    }
+                    
+                    wine = Wine()
+                    for key, value in wine_dict.items():
+                        setattr(wine, key, value)
+                    wines.append(wine)
+                
+                logger.info(f"Trovati {len(wines)} vini per ricerca '{search_term}' per {telegram_id}/{user.business_name}")
+                return wines
+                
+            except Exception as e:
+                logger.error(f"Errore ricerca vini da tabella dinamica {table_name}: {e}")
+                return []
+    
+    async def get_inventory_logs(self, telegram_id: int, limit: int = 50):
+        """Ottieni log inventario dalla tabella dinamica LOG interazione (async)"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} LOG interazione"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                """)
+                
+                result = await session.execute(query, {
+                    "user_id": user.id,
+                    "limit": limit
+                })
+                rows = result.fetchall()
+                
+                logs = []
+                for row in rows:
+                    log_dict = {
+                        'id': row.id if hasattr(row, 'id') else None,
+                        'message': row.message if hasattr(row, 'message') else str(row),
+                        'created_at': row.created_at if hasattr(row, 'created_at') else None
+                    }
+                    logs.append(log_dict)
+                
+                return logs
+            except Exception as e:
+                logger.error(f"Errore leggendo log da tabella dinamica {table_name}: {e}")
+                return []
+    
+    async def get_movement_logs(self, telegram_id: int, limit: int = 50):
+        """Ottieni log movimenti dalla tabella 'Consumi e rifornimenti' (async)"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} Consumi e rifornimenti"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    ORDER BY data DESC
+                    LIMIT :limit
+                """)
+                
+                result = await session.execute(query, {
+                    "user_id": user.id,
+                    "limit": limit
+                })
+                rows = result.fetchall()
+                
+                logs = []
+                for row in rows:
+                    # Converte nuova struttura (data, Prodotto, prodotto_rifornito, prodotto_consumato)
+                    # alla vecchia struttura compatibile (movement_date, wine_name, movement_type, quantity_change)
+                    prodotto_rifornito = getattr(row, 'prodotto_rifornito', None) or 0
+                    prodotto_consumato = getattr(row, 'prodotto_consumato', None) or 0
+                    
+                    if prodotto_consumato > 0:
+                        movement_type = 'consumo'
+                        quantity_change = -prodotto_consumato
+                    elif prodotto_rifornito > 0:
+                        movement_type = 'rifornimento'
+                        quantity_change = prodotto_rifornito
+                    else:
+                        continue  # Skip se entrambi null
+                    
+                    log_dict = {
+                        'id': getattr(row, 'id', None),
+                        'wine_name': getattr(row, 'Prodotto', None) or getattr(row, 'prodotto', None),
+                        'movement_type': movement_type,
+                        'quantity_change': quantity_change,
+                        'movement_date': getattr(row, 'data', None) or getattr(row, 'created_at', None)
+                    }
+                    logs.append(log_dict)
+                
+                return logs
+            except Exception as e:
+                logger.error(f"Errore leggendo movimenti da tabella dinamica {table_name}: {e}")
+                return []
+    
+    async def add_wine(self, telegram_id: int, wine_data: Dict[str, Any]) -> Optional[Wine]:
+        """Aggiungi un vino all'inventario (alle tabelle dinamiche)"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                logger.warning(f"User {telegram_id} non trovato o business_name mancante")
+                return None
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                # Prepara valori per INSERT
+                insert_query = sql_text(f"""
+                    INSERT INTO {table_name} 
+                    (user_id, name, producer, vintage, grape_variety, region, country, 
+                     wine_type, classification, quantity, min_quantity, cost_price, 
+                     selling_price, alcohol_content, description, notes, created_at, updated_at)
+                    VALUES 
+                    (:user_id, :name, :producer, :vintage, :grape_variety, :region, :country,
+                     :wine_type, :classification, :quantity, :min_quantity, :cost_price,
+                     :selling_price, :alcohol_content, :description, :notes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    RETURNING id, name, producer, vintage, grape_variety, region, country,
+                              wine_type, classification, quantity, min_quantity, cost_price,
+                              selling_price, alcohol_content, description, notes, created_at, updated_at
+                """)
+                
+                result = await session.execute(insert_query, {
+                    "user_id": user.id,
+                    "name": wine_data.get('name', ''),
+                    "producer": wine_data.get('producer'),
+                    "vintage": wine_data.get('vintage'),
+                    "grape_variety": wine_data.get('grape_variety'),
+                    "region": wine_data.get('region'),
+                    "country": wine_data.get('country'),
+                    "wine_type": wine_data.get('wine_type'),
+                    "classification": wine_data.get('classification'),
+                    "quantity": wine_data.get('quantity', 0),
+                    "min_quantity": wine_data.get('min_quantity', 0),
+                    "cost_price": wine_data.get('cost_price'),
+                    "selling_price": wine_data.get('selling_price'),
+                    "alcohol_content": wine_data.get('alcohol_content'),
+                    "description": wine_data.get('description'),
+                    "notes": wine_data.get('notes')
+                })
+                
+                await session.commit()
+                row = result.fetchone()
+                
+                if row:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    logger.info(f"Vino aggiunto: {wine.name} per utente {telegram_id}")
+                    return wine
+                return None
+            except Exception as e:
+                logger.error(f"Errore aggiungendo vino: {e}")
+                await session.rollback()
+                return None
+    
+    async def get_low_stock_wines(self, telegram_id: int) -> List[Wine]:
+        """Ottieni vini con scorta bassa"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    AND quantity <= COALESCE(min_quantity, 0)
+                    ORDER BY name
+                """)
+                
+                result = await session.execute(query, {"user_id": user.id})
+                rows = result.fetchall()
+                
+                wines = []
+                for row in rows:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    wines.append(wine)
+                
+                return wines
+            except Exception as e:
+                logger.error(f"Errore recuperando scorte basse: {e}")
+                return []
+
+
+# Istanza globale
+async_db_manager = AsyncDatabaseManager()
+

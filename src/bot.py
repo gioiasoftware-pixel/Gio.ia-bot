@@ -3,7 +3,7 @@ import logging
 from aiohttp import web
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from .ai import get_ai_response
-from .database import db_manager
+# db_manager rimosso - usa async_db_manager
 from .new_onboarding import new_onboarding_manager
 from .inventory import inventory_manager
 from .file_upload import file_upload_manager
@@ -12,10 +12,8 @@ from .inventory_movements import inventory_movement_manager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Verifica se il database è disponibile
-DATABASE_AVAILABLE = db_manager.engine is not None
-if not DATABASE_AVAILABLE:
-    logger.warning("⚠️ Database non disponibile - alcune funzionalità saranno limitate")
+# Database disponibile verificato dinamicamente in chat_handler
+DATABASE_AVAILABLE = True  # Verificato con async_db_manager
 
 # Carica variabili ambiente direttamente (senza validazione complessa)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -45,13 +43,14 @@ async def start_cmd(update, context):
         )
         return
     
-    # Verifica se l'onboarding è completato
-    if not new_onboarding_manager.is_onboarding_complete(telegram_id):
+    # Verifica se l'onboarding è completato - ASYNC
+    if not await new_onboarding_manager.is_onboarding_complete(telegram_id):
         # Avvia nuovo onboarding
         await new_onboarding_manager.start_new_onboarding(update, context)
     else:
-        # Onboarding già completato
-        user_data = db_manager.get_user_by_telegram_id(telegram_id)
+        # Onboarding già completato - ASYNC
+        from .database_async import async_db_manager
+        user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
         welcome_text = (
             f"Bentornato {username}! 👋\n\n"
             f"🏢 **{user_data.business_name}**\n\n"
@@ -160,15 +159,54 @@ async def chat_handler(update, context):
         return
     
     try:
+        from .structured_logging import log_with_context, set_request_context
+        from .rate_limiter import check_rate_limit
+        from .database_async import async_db_manager
+        import uuid
+        
         user = update.effective_user
         user_text = update.message.text
         username = user.username or user.first_name or "Unknown"
         telegram_id = user.id
+        correlation_id = str(uuid.uuid4())
+        update_id = update.update_id
+        message_id = update.message.message_id
         
-        logger.info(f"Messaggio da {username} (ID: {telegram_id}): {user_text[:50]}...")
+        # ✅ Imposta contesto request
+        set_request_context(telegram_id, correlation_id)
         
-        # Verifica disponibilità database
-        if not DATABASE_AVAILABLE:
+        log_with_context(
+            "info",
+            f"Messaggio da {username}: {user_text[:50]}...",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        # ✅ RATE LIMITING
+        allowed, retry_after = await check_rate_limit(
+            telegram_id,
+            "message",
+            max_requests=20,
+            window_seconds=60
+        )
+        
+        if not allowed:
+            await update.message.reply_text(
+                f"⏳ **Rate limit**\n\n"
+                f"Hai inviato troppi messaggi. Riprova tra {retry_after} secondi."
+            )
+            return
+        
+        # Verifica disponibilità database (usa async_db_manager per test)
+        try:
+            test_user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        except Exception as e:
+            log_with_context(
+                "error",
+                f"Database error: {e}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             await update.message.reply_text(
                 "⚠️ **Database non disponibile**\n\n"
                 "Il sistema è temporaneamente in manutenzione.\n"
@@ -193,14 +231,15 @@ async def chat_handler(update, context):
         else:
             logger.info(f"[BOT] Movement message NOT handled, passing to AI")
         
-        # Gestisci aggiunta vino se in corso
-        if inventory_manager.handle_wine_data(update, context):
+        # Gestisci aggiunta vino se in corso - ASYNC
+        if await inventory_manager.handle_wine_data(update, context):
             return
         
         await update.message.reply_text("💭 Sto pensando...")
         
-        # Chiama AI con contesto utente
-        reply = get_ai_response(user_text, telegram_id)
+        # Chiama AI con contesto utente (async)
+        from .ai import get_ai_response
+        reply = await get_ai_response(user_text, telegram_id, correlation_id)
         
         # Verifica se l'AI ha rilevato un movimento (marker speciale)
         if reply and reply.startswith("__MOVEMENT__:"):
@@ -232,27 +271,27 @@ async def chat_handler(update, context):
 # Comandi inventario
 async def inventario_cmd(update, context):
     """Mostra l'inventario dell'utente"""
-    inventory_manager.show_inventory(update, context)
+    await inventory_manager.show_inventory(update, context)
 
 
 async def aggiungi_cmd(update, context):
     """Avvia l'aggiunta di un vino"""
-    inventory_manager.start_add_wine(update, context)
+    await inventory_manager.start_add_wine(update, context)
 
 
 async def scorte_cmd(update, context):
     """Mostra vini con scorte basse"""
-    inventory_manager.show_low_stock(update, context)
+    await inventory_manager.show_low_stock(update, context)
 
 
 async def upload_cmd(update, context):
     """Avvia il processo di upload inventario"""
-    file_upload_manager.start_upload_process(update, context)
+    await file_upload_manager.start_upload_process(update, context)
 
 
 async def log_cmd(update, context):
     """Mostra i log dei movimenti inventario"""
-    inventory_movement_manager.show_movement_logs(update, context)
+    await inventory_movement_manager.show_movement_logs(update, context)
 
 async def cancella_schema_cmd(update, context):
     """
@@ -422,22 +461,21 @@ async def callback_handler(update, context):
     # if new_onboarding_manager.handle_callback_query(update, context):
     #     return
     
-    # Gestisci callback inventario
-    if inventory_manager.handle_wine_callback(update, context):
+    # Gestisci callback inventario - ASYNC
+    if await inventory_manager.handle_wine_callback(update, context):
         return
     
-    # Gestisci callback inventario (pulsanti)
+    # Gestisci callback inventario (pulsanti) - ASYNC
     if query.data == "add_wine":
-        inventory_manager.start_add_wine(update, context)
+        await inventory_manager.start_add_wine(update, context)
     elif query.data == "low_stock":
-        inventory_manager.show_low_stock(update, context)
+        await inventory_manager.show_low_stock(update, context)
     elif query.data == "full_report":
-        # TODO: Implementare report completo
         await query.edit_message_text("📊 Report completo in arrivo...")
     
     # Gestisci callback upload
     elif query.data == "csv_example":
-        file_upload_manager.show_csv_example(update, context)
+        await file_upload_manager.show_csv_example(update, context)
     elif query.data == "cancel_upload":
         await query.edit_message_text("❌ Upload annullato.")
 

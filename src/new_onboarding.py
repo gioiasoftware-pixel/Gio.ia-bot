@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from .database import db_manager
+from .database_async import async_db_manager
 from .file_upload import file_upload_manager
 
 logger = logging.getLogger(__name__)
@@ -38,10 +38,11 @@ class NewOnboardingManager:
         
         logger.info(f"Nuovo onboarding AI avviato per: {user.username} (ID: {telegram_id})")
         
-        # Crea utente se non esiste
-        existing_user = db_manager.get_user_by_telegram_id(telegram_id)
+        # Crea utente se non esiste - ASYNC
+        from .database_async import async_db_manager
+        existing_user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not existing_user:
-            db_manager.create_user(
+            await async_db_manager.create_user(
                 telegram_id=telegram_id,
                 username=user.username,
                 first_name=user.first_name,
@@ -132,7 +133,7 @@ class NewOnboardingManager:
         
         try:
             # Aggiorna dati utente
-            success = db_manager.update_user_onboarding(
+            success = await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 business_name=onboarding_data.get('restaurant_name'),
                 onboarding_completed=True
@@ -240,7 +241,7 @@ class NewOnboardingManager:
                 f"💾 Sto salvando i dati..."
             )
             
-            success = db_manager.update_user_onboarding(
+            success = await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 business_name=business_name
             )
@@ -264,8 +265,8 @@ class NewOnboardingManager:
             )
             return
         
-        # SECONDA: Recupera business_name dal database (garantisce consistenza)
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        # SECONDA: Recupera business_name dal database (garantisce consistenza) - ASYNC
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user or not user.business_name:
             logger.error(f"Business name non trovato nel database per {telegram_id} dopo il salvataggio")
             await update.message.reply_text(
@@ -324,7 +325,7 @@ class NewOnboardingManager:
         document = update.message.document
         
         # Recupera business_name dal database (non dal context)
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user or not user.business_name:
             await update.message.reply_text(
                 "⚠️ **Errore**: Nome locale non trovato.\n"
@@ -359,7 +360,7 @@ class NewOnboardingManager:
         photo = update.message.photo[-1]  # Prendi la foto più grande
         
         # Recupera business_name dal database (non dal context)
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user or not user.business_name:
             await update.message.reply_text(
                 "⚠️ **Errore**: Nome locale non trovato.\n"
@@ -515,7 +516,7 @@ class NewOnboardingManager:
         
         try:
             # Recupera business_name dal database (garantisce consistenza)
-            user = db_manager.get_user_by_telegram_id(telegram_id)
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)
             if not user or not user.business_name:
                 logger.error(f"Business name non trovato nel database per {telegram_id}")
                 await update.message.reply_text(
@@ -527,7 +528,7 @@ class NewOnboardingManager:
             business_name_from_db = user.business_name
             
             # Completa onboarding (business_name già salvato, aggiorna solo onboarding_completed)
-            db_manager.update_user_onboarding(
+            await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 onboarding_completed=True
             )
@@ -613,7 +614,7 @@ class NewOnboardingManager:
         
         try:
             # Aggiorna utente con nome locale
-            db_manager.update_user_onboarding(
+            await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 business_name=business_name,
                 onboarding_completed=True
@@ -712,9 +713,9 @@ class NewOnboardingManager:
                 "⚠️ Errore durante l'elaborazione. Riprova più tardi."
             )
     
-    def is_onboarding_complete(self, telegram_id: int) -> bool:
+    async def is_onboarding_complete(self, telegram_id: int) -> bool:
         """Verifica se l'onboarding è completato"""
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         return user and user.onboarding_completed if user else False
 
 # Istanza globale del nuovo gestore onboarding

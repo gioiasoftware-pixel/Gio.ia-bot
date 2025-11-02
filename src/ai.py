@@ -4,7 +4,7 @@ import re
 import asyncio
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
-from .database import db_manager
+from .database_async import async_db_manager
 
 # Carica direttamente la variabile ambiente
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -20,7 +20,7 @@ os.environ.pop('all_proxy', None)
 logger = logging.getLogger(__name__)
 
 
-def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
+async def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
     """
     Usa OpenAI per rilevare se il messaggio è un movimento inventario quando regex non match.
     Gestisce variazioni linguistiche naturali come "mi sono arrivati", "arrivati", ecc.
@@ -33,12 +33,12 @@ def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
         if not OPENAI_API_KEY:
             return None
         
-        # Verifica condizioni base (stesse del check regex)
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        # Verifica condizioni base (stesse del check regex) - ASYNC
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user or not user.business_name or user.business_name == "Upload Manuale":
             return None
         
-        user_wines = db_manager.get_user_wines(telegram_id)
+        user_wines = await async_db_manager.get_user_wines(telegram_id)
         if not user_wines or len(user_wines) == 0:
             return None
         
@@ -92,11 +92,15 @@ Esempi:
         
         result = json.loads(json_text)
         
-        if result.get("is_movement") and result.get("type") and result.get("quantity") and result.get("wine_name"):
-            movement_type = result["type"]
-            quantity = int(result["quantity"])
-            wine_name = result["wine_name"].strip()
-            logger.info(f"[AI-MOVEMENT] Movimento rilevato da AI: {movement_type} {quantity} {wine_name}")
+        # ✅ VALIDAZIONE OUTPUT LLM con Pydantic
+        from .ai_validation import validate_movement_result
+        validated = validate_movement_result(result)
+        
+        if validated and validated.is_movement and validated.type and validated.quantity and validated.wine_name:
+            movement_type = validated.type
+            quantity = validated.quantity
+            wine_name = validated.wine_name.strip()
+            logger.info(f"[AI-MOVEMENT] Movimento rilevato da AI (validated): {movement_type} {quantity} {wine_name}")
             return f"__MOVEMENT__:{movement_type}:{quantity}:{wine_name}"
         
         return None
@@ -109,7 +113,7 @@ Esempi:
         return None
 
 
-def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
+async def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
     """
     Rileva se il prompt contiene un movimento inventario (consumo/rifornimento).
     Se sì, lo processa direttamente e ritorna il messaggio di conferma.
@@ -144,8 +148,8 @@ def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
             r'aggiunto (\d+) (.+)',
         ]
         
-        # Verifica se utente esiste e ha business_name valido + inventario
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        # Verifica se utente esiste e ha business_name valido + inventario - ASYNC
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user:
             return None  # Utente non trovato
         
@@ -154,13 +158,13 @@ def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
             return None  # Business name non valido
         
         # Verifica che l'inventario abbia almeno 1 vino
-        user_wines = db_manager.get_user_wines(telegram_id)
+        user_wines = await async_db_manager.get_user_wines(telegram_id)
         if not user_wines or len(user_wines) == 0:
             return None  # Inventario vuoto
         
         # Se onboarding non completato ma condizioni sono soddisfatte, completa automaticamente
         if not user.onboarding_completed:
-            db_manager.update_user_onboarding(
+            await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 onboarding_completed=True
             )
@@ -188,7 +192,7 @@ def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
         
         # Se regex non ha matchato, usa AI per rilevare movimenti con variazioni linguistiche
         logger.info(f"[AI-MOVEMENT] Regex non matchato, provo con AI per: {prompt_lower[:50]}")
-        ai_movement_result = _check_movement_with_ai(prompt, telegram_id)
+        ai_movement_result = await _check_movement_with_ai(prompt, telegram_id)
         if ai_movement_result:
             logger.info(f"[AI-MOVEMENT] Rilevato movimento tramite AI: {ai_movement_result}")
             return ai_movement_result
@@ -208,8 +212,8 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
     try:
         from .processor_client import processor_client
         
-        # Recupera business_name
-        user = db_manager.get_user_by_telegram_id(telegram_id)
+        # Recupera business_name - ASYNC
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
         if not user or not user.business_name:
             return "❌ **Errore**: Nome locale non trovato.\nCompleta prima l'onboarding con `/start`."
         
@@ -392,7 +396,7 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
     return None
 
 
-def get_ai_response(prompt: str, telegram_id: int = None) -> str:
+async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: str = None) -> str:
     """Genera risposta AI con accesso ai dati utente."""
     logger.info(f"=== DEBUG OPENAI ===")
     logger.info(f"OPENAI_API_KEY presente: {bool(OPENAI_API_KEY)}")
@@ -407,10 +411,10 @@ def get_ai_response(prompt: str, telegram_id: int = None) -> str:
         logger.warning("Prompt vuoto ricevuto")
         return "⚠️ Messaggio vuoto ricevuto. Prova a scrivere qualcosa!"
     
-    # Rileva movimenti inventario PRIMA di chiamare l'AI
+    # Rileva movimenti inventario PRIMA di chiamare l'AI - ASYNC
     # Se riconosce un movimento, ritorna un marker speciale che il bot.py interpreterà
     if telegram_id:
-        movement_marker = _check_and_process_movement(prompt, telegram_id)
+        movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
             return movement_marker  # Ritorna marker che verrà processato in bot.py
     
@@ -421,7 +425,7 @@ def get_ai_response(prompt: str, telegram_id: int = None) -> str:
         
         if telegram_id:
             try:
-                user = db_manager.get_user_by_telegram_id(telegram_id)
+                user = await async_db_manager.get_user_by_telegram_id(telegram_id)  # ASYNC
                 if user:
                     # Aggiungi informazioni utente
                     user_context = f"""
@@ -461,9 +465,9 @@ INVENTARIO ATTUALE:
                                 logger.info(f"Rilevata ricerca vino specifico: '{wine_search_term}'")
                                 break
                     
-                    # Se è stata rilevata una ricerca, cerca nel database
+                    # Se è stata rilevata una ricerca, cerca nel database - ASYNC
                     if wine_search_term:
-                        found_wines = db_manager.search_wines(telegram_id, wine_search_term, limit=5)
+                        found_wines = await async_db_manager.search_wines(telegram_id, wine_search_term, limit=5)
                         if found_wines:
                             # Prova a generare risposta pre-formattata (bypass AI per domande specifiche)
                             formatted_response = _format_wine_response_directly(prompt, telegram_id, found_wines)
@@ -496,7 +500,7 @@ INVENTARIO ATTUALE:
                             # (AI dirà "non ho questa informazione" in modo più naturale)
                     
                     # Ottieni statistiche inventario (non tutti i vini)
-                    wines = db_manager.get_user_wines(telegram_id)
+                    wines = await async_db_manager.get_user_wines(telegram_id)  # ASYNC
                     if wines:
                         user_context += f"- Totale vini: {len(wines)}\n"
                         user_context += f"- Quantità totale: {sum(w.quantity for w in wines)} bottiglie\n"
@@ -506,16 +510,9 @@ INVENTARIO ATTUALE:
                     else:
                         user_context += "- Inventario vuoto\n"
                     
-                    # Aggiungi log recenti (ultimi 5 movimenti)
-                    user_context += "\nMOVIMENTI RECENTI:\n"
-                    logs = db_manager.get_inventory_logs(telegram_id, limit=5)
-                    if logs:
-                        for log in logs:
-                            date_str = log['movement_date'].strftime("%d/%m %H:%M")
-                            tipo = "📉 Consumo" if log['movement_type'] == 'consumo' else "📈 Rifornimento"
-                            user_context += f"- {date_str}: {tipo} - {log['wine_name']} ({abs(log['quantity_change'])} bot.)\n"
-                    else:
-                        user_context += "- Nessun movimento registrato\n"
+                    # Nota: I movimenti inventario sono ora gestiti dalla tabella "Consumi e rifornimenti"
+                    # I log interazione contengono solo messaggi utente, non movimenti
+                    # user_context += "\nMOVIMENTI RECENTI:\n"  # Disabilitato - usa tabella Consumi
             except Exception as e:
                 logger.error(f"Errore accesso database per utente {telegram_id}: {e}")
                 user_context = "- Database temporaneamente non disponibile\n"

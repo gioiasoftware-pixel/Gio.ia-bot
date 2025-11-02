@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from .database import db_manager
+from .database_async import async_db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class InventoryMovementManager:
         logger.info(f"[MOVEMENT] Checking movement patterns for message: {message_text}")
         
         # Verifica se utente esiste e ha business_name valido + inventario
-        user_db = db_manager.get_user_by_telegram_id(telegram_id)
+        user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)  # ASYNC
         if not user_db:
             logger.warning(f"[MOVEMENT] User {telegram_id} not found in database, skipping movement check")
             return False
@@ -66,7 +66,7 @@ class InventoryMovementManager:
             return False
         
         # Verifica che l'inventario abbia almeno 1 vino
-        user_wines = db_manager.get_user_wines(telegram_id)
+        user_wines = await async_db_manager.get_user_wines(telegram_id)  # ASYNC
         if not user_wines or len(user_wines) == 0:
             logger.info(f"[MOVEMENT] User {telegram_id} non ha vini nell'inventario, skipping movement check")
             return False
@@ -75,7 +75,7 @@ class InventoryMovementManager:
         
         # Se onboarding non completato ma condizioni sono soddisfatte, completa automaticamente
         if not user_db.onboarding_completed:
-            db_manager.update_user_onboarding(
+            await async_db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
                 onboarding_completed=True
             )
@@ -109,7 +109,7 @@ class InventoryMovementManager:
             from .processor_client import processor_client
             
             # Recupera business_name dal database
-            user = db_manager.get_user_by_telegram_id(telegram_id)
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)  # ASYNC
             if not user or not user.business_name:
                 await update.message.reply_text(
                     "❌ **Errore**: Nome locale non trovato.\n"
@@ -178,7 +178,7 @@ class InventoryMovementManager:
             from .processor_client import processor_client
             
             # Recupera business_name dal database
-            user = db_manager.get_user_by_telegram_id(telegram_id)
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)  # ASYNC
             if not user or not user.business_name:
                 await update.message.reply_text(
                     "❌ **Errore**: Nome locale non trovato.\n"
@@ -253,16 +253,16 @@ class InventoryMovementManager:
         
         return None
     
-    def show_movement_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+    async def show_movement_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                           days: int = 7) -> None:
         """Mostra i log dei movimenti"""
         user = update.effective_user
         telegram_id = user.id
         
-        logs = db_manager.get_inventory_logs(telegram_id, limit=50)
+        logs = await async_db_manager.get_movement_logs(telegram_id, limit=50)  # ASYNC - usa Consumi e rifornimenti
         
         if not logs:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "📋 **Nessun movimento registrato**\n\n"
                 "Non ci sono ancora movimenti nel tuo inventario.\n"
                 "💡 Inizia comunicando i consumi e rifornimenti!"
@@ -275,7 +275,7 @@ class InventoryMovementManager:
             logs = [log for log in logs if log['movement_date'] >= cutoff_date]
         
         if not logs:
-            update.message.reply_text(
+            await update.message.reply_text(
                 f"📋 **Nessun movimento negli ultimi {days} giorni**\n\n"
                 "Non ci sono movimenti recenti nel tuo inventario."
             )
@@ -313,9 +313,9 @@ class InventoryMovementManager:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
-    def get_daily_summary(self, telegram_id: int, date: datetime = None) -> Dict[str, Any]:
+    async def get_daily_summary(self, telegram_id: int, date: datetime = None) -> Dict[str, Any]:
         """Ottieni riassunto giornaliero dei movimenti"""
         if date is None:
             date = datetime.utcnow()
@@ -323,7 +323,7 @@ class InventoryMovementManager:
         start_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
         end_date = start_date + timedelta(days=1)
         
-        logs = db_manager.get_inventory_logs(telegram_id, limit=1000)
+        logs = await async_db_manager.get_movement_logs(telegram_id, limit=1000)  # ASYNC - usa Consumi e rifornimenti
         
         # Filtra per data
         daily_logs = [

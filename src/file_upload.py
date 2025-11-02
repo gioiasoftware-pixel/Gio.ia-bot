@@ -7,7 +7,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from .database import db_manager, Wine
+from .database_async import Wine  # Solo per modello se necessario
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,26 @@ class FileUploadManager:
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce upload documenti (CSV, Excel)"""
         from .processor_client import processor_client
+        from .database_async import async_db_manager
+        from .locks import user_mutex
+        from .structured_logging import log_with_context, get_request_context
+        import uuid
         
         try:
             document = update.message.document
             file_name = document.file_name.lower()
+            telegram_id = update.effective_user.id
+            update_id = update.update_id
+            message_id = update.message.message_id
+            correlation_id = get_request_context().get("correlation_id") or str(uuid.uuid4())
+            client_msg_id = f"telegram:{update_id}:{message_id}"
+            
+            log_with_context(
+                "info",
+                f"File upload started: {document.file_name}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             
             # Verifica tipo file supportato
             if not (file_name.endswith('.csv') or file_name.endswith('.xlsx') or file_name.endswith('.xls')):
@@ -41,49 +57,58 @@ class FileUploadManager:
                 )
                 return False
             
-            # Scarica il file
-            file_obj = await context.bot.get_file(document.file_id)
-            file_content = await file_obj.download_as_bytearray()
-            
-            # Determina tipo file
-            file_type = 'csv' if file_name.endswith('.csv') else 'excel'
-            
-            await update.message.reply_text(
-                "✅ **File ricevuto!**\n\n"
-                f"📄 **Nome**: {document.file_name}\n"
-                f"📊 **Dimensione**: {document.file_size:,} bytes\n\n"
-                "🔄 **Elaborazione in corso...**\n"
-                "Il file verrà processato dal sistema di elaborazione."
-            )
-            
-            # Invia al processor
-            telegram_id = update.effective_user.id
-            
-            # Recupera business_name dal database utente
-            user = db_manager.get_user_by_telegram_id(telegram_id)
-            if user and user.business_name and user.business_name != "Upload Manuale":
-                business_name = user.business_name
-            else:
-                # Fallback se utente non ha ancora completato onboarding
-                business_name = "Upload Manuale"
-                logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
-                
-                # Avvisa utente se non ha completato onboarding
-                if not user or not user.onboarding_completed:
+            # ✅ LOCK per serializzare upload stesso utente
+            try:
+                async with user_mutex(telegram_id, timeout_seconds=300, block_timeout=10):
+                    # Scarica il file
+                    file_obj = await context.bot.get_file(document.file_id)
+                    file_content = await file_obj.download_as_bytearray()
+                    
+                    # Determina tipo file
+                    file_type = 'csv' if file_name.endswith('.csv') else 'excel'
+                    
                     await update.message.reply_text(
-                        "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
-                        "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
-                        "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
+                        "✅ **File ricevuto!**\n\n"
+                        f"📄 **Nome**: {document.file_name}\n"
+                        f"📊 **Dimensione**: {document.file_size:,} bytes\n\n"
+                        "🔄 **Elaborazione in corso...**\n"
+                        "Il file verrà processato dal sistema di elaborazione."
                     )
-            
-            # Invia file e ottieni job_id
-            job_response = await processor_client.process_inventory(
-                telegram_id=telegram_id,
-                business_name=business_name,
-                file_type=file_type,
-                file_content=file_content,
-                file_name=document.file_name
-            )
+                    
+                    # ✅ Recupera business_name dal database utente - ASYNC
+                    user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                    if user and user.business_name and user.business_name != "Upload Manuale":
+                        business_name = user.business_name
+                    else:
+                        # Fallback se utente non ha ancora completato onboarding
+                        business_name = "Upload Manuale"
+                        logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
+                        
+                        # Avvisa utente se non ha completato onboarding
+                        if not user or not user.onboarding_completed:
+                            await update.message.reply_text(
+                                "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
+                                "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
+                                "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
+                            )
+                    
+                    # ✅ Invia file e ottieni job_id con client_msg_id e correlation_id
+                    job_response = await processor_client.process_inventory(
+                        telegram_id=telegram_id,
+                        business_name=business_name,
+                        file_type=file_type,
+                        file_content=file_content,
+                        file_name=document.file_name,
+                        client_msg_id=client_msg_id,  # Per idempotenza
+                        correlation_id=correlation_id  # Per logging
+                    )
+            except RuntimeError as e:
+                # Lock non ottenuto - utente sta già caricando un file
+                await update.message.reply_text(
+                    "⏳ **Operazione in corso**\n\n"
+                    "Stai già caricando un file. Attendi il completamento prima di caricarne un altro."
+                )
+                return False
             
             if job_response.get('status') == 'error':
                 # Errore creando job
@@ -171,9 +196,9 @@ class FileUploadManager:
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
                 
-                # Se inventario caricato con successo e business_name valido, completa onboarding
+                # Se inventario caricato con successo e business_name valido, completa onboarding - ASYNC
                 if error_count == 0 and business_name and business_name != "Upload Manuale":
-                    db_manager.update_user_onboarding(
+                    await async_db_manager.update_user_onboarding(
                         telegram_id=telegram_id,
                         onboarding_completed=True
                     )
@@ -209,50 +234,75 @@ class FileUploadManager:
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce upload foto per OCR"""
         from .processor_client import processor_client
+        from .database_async import async_db_manager
+        from .locks import user_mutex
+        from .structured_logging import log_with_context, get_request_context
+        import uuid
         
         try:
             # Prendi la foto con risoluzione più alta
             photo = update.message.photo[-1]
-            
-            # Scarica la foto
-            file_obj = await context.bot.get_file(photo.file_id)
-            file_content = await file_obj.download_as_bytearray()
-            
-            await update.message.reply_text(
-                "✅ **Foto ricevuta!**\n\n"
-                f"📷 **Risoluzione**: {photo.width}x{photo.height}\n\n"
-                "🔄 **Elaborazione OCR in corso...**\n"
-                "La foto verrà processata per estrarre i dati dell'inventario."
-            )
-            
-            # Invia al processor
             telegram_id = update.effective_user.id
+            update_id = update.update_id
+            message_id = update.message.message_id
+            correlation_id = get_request_context().get("correlation_id") or str(uuid.uuid4())
+            client_msg_id = f"telegram:{update_id}:{message_id}"
             
-            # Recupera business_name dal database utente
-            user = db_manager.get_user_by_telegram_id(telegram_id)
-            if user and user.business_name and user.business_name != "Upload Manuale":
-                business_name = user.business_name
-            else:
-                # Fallback se utente non ha ancora completato onboarding
-                business_name = "Upload Manuale"
-                logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
-                
-                # Avvisa utente se non ha completato onboarding
-                if not user or not user.onboarding_completed:
-                    await update.message.reply_text(
-                        "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
-                        "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
-                        "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
-                    )
-            
-            # Invia file e ottieni job_id
-            job_response = await processor_client.process_inventory(
+            log_with_context(
+                "info",
+                f"Photo upload started: {photo.file_id}",
                 telegram_id=telegram_id,
-                business_name=business_name,
-                file_type='photo',
-                file_content=file_content,
-                file_name='inventario.jpg'
+                correlation_id=correlation_id
             )
+            
+            # ✅ LOCK per serializzare upload stesso utente
+            try:
+                async with user_mutex(telegram_id, timeout_seconds=300, block_timeout=10):
+                    # Scarica la foto
+                    file_obj = await context.bot.get_file(photo.file_id)
+                    file_content = await file_obj.download_as_bytearray()
+                    
+                    await update.message.reply_text(
+                        "✅ **Foto ricevuta!**\n\n"
+                        f"📷 **Risoluzione**: {photo.width}x{photo.height}\n\n"
+                        "🔄 **Elaborazione OCR in corso...**\n"
+                        "La foto verrà processata per estrarre i dati dell'inventario."
+                    )
+                    
+                    # ✅ Recupera business_name dal database utente - ASYNC
+                    user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                    if user and user.business_name and user.business_name != "Upload Manuale":
+                        business_name = user.business_name
+                    else:
+                        # Fallback se utente non ha ancora completato onboarding
+                        business_name = "Upload Manuale"
+                        logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
+                        
+                        # Avvisa utente se non ha completato onboarding
+                        if not user or not user.onboarding_completed:
+                            await update.message.reply_text(
+                                "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
+                                "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
+                                "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
+                            )
+                    
+                    # ✅ Invia file e ottieni job_id con client_msg_id e correlation_id
+                    job_response = await processor_client.process_inventory(
+                        telegram_id=telegram_id,
+                        business_name=business_name,
+                        file_type='photo',
+                        file_content=file_content,
+                        file_name='inventario.jpg',
+                        client_msg_id=client_msg_id,  # Per idempotenza
+                        correlation_id=correlation_id  # Per logging
+                    )
+            except RuntimeError as e:
+                # Lock non ottenuto - utente sta già caricando un file
+                await update.message.reply_text(
+                    "⏳ **Operazione in corso**\n\n"
+                    "Stai già caricando un file. Attendi il completamento prima di caricarne un altro."
+                )
+                return False
             
             if job_response.get('status') == 'error':
                 # Errore creando job
@@ -337,9 +387,9 @@ class FileUploadManager:
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
                 
-                # Se inventario caricato con successo e business_name valido, completa onboarding
+                # Se inventario caricato con successo e business_name valido, completa onboarding - ASYNC
                 if error_count == 0 and business_name and business_name != "Upload Manuale":
-                    db_manager.update_user_onboarding(
+                    await async_db_manager.update_user_onboarding(
                         telegram_id=telegram_id,
                         onboarding_completed=True
                     )
@@ -390,12 +440,12 @@ class FileUploadManager:
             "• Verifica che tutti i dati siano visibili"
         )
     
-    def start_upload_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def start_upload_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Avvia il processo di upload inventario"""
         instructions = self.get_upload_instructions()
-        update.message.reply_text(instructions, parse_mode='Markdown')
+        await update.message.reply_text(instructions, parse_mode='Markdown')
     
-    def show_csv_example(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def show_csv_example(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Mostra esempio di file CSV"""
         example = (
             "📋 **Esempio file CSV:**\n\n"
@@ -410,25 +460,8 @@ class FileUploadManager:
             "• Includi intestazioni nella prima riga\n"
             "• Salva come .csv"
         )
-        update.message.reply_text(example, parse_mode='Markdown')
+        await update.message.reply_text(example, parse_mode='Markdown')
     
-    def _process_csv(self, file_data: bytes) -> list:
-        """Processa file CSV (metodo per compatibilità onboarding)"""
-        # Questo metodo è per compatibilità con l'onboarding
-        # L'elaborazione reale è ora gestita dal processor
-        return []
-    
-    def _process_excel(self, file_data: bytes) -> list:
-        """Processa file Excel (metodo per compatibilità onboarding)"""
-        # Questo metodo è per compatibilità con l'onboarding
-        # L'elaborazione reale è ora gestita dal processor
-        return []
-    
-    def _process_photo_ocr(self, file_data: bytes) -> list:
-        """Processa foto OCR (metodo per compatibilità onboarding)"""
-        # Questo metodo è per compatibilità con l'onboarding
-        # L'elaborazione reale è ora gestita dal processor
-        return []
 
 # Istanza globale
 file_upload_manager = FileUploadManager()
