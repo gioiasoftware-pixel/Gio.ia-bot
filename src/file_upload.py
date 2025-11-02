@@ -58,7 +58,23 @@ class FileUploadManager:
             
             # Invia al processor
             telegram_id = update.effective_user.id
-            business_name = "Upload Manuale"  # Nome temporaneo
+            
+            # Recupera business_name dal database utente
+            user = db_manager.get_user_by_telegram_id(telegram_id)
+            if user and user.business_name and user.business_name != "Upload Manuale":
+                business_name = user.business_name
+            else:
+                # Fallback se utente non ha ancora completato onboarding
+                business_name = "Upload Manuale"
+                logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
+                
+                # Avvisa utente se non ha completato onboarding
+                if not user or not user.onboarding_completed:
+                    await update.message.reply_text(
+                        "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
+                        "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
+                        "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
+                    )
             
             # Invia file e ottieni job_id
             job_response = await processor_client.process_inventory(
@@ -172,7 +188,23 @@ class FileUploadManager:
             
             # Invia al processor
             telegram_id = update.effective_user.id
-            business_name = "Upload Manuale"  # Nome temporaneo
+            
+            # Recupera business_name dal database utente
+            user = db_manager.get_user_by_telegram_id(telegram_id)
+            if user and user.business_name and user.business_name != "Upload Manuale":
+                business_name = user.business_name
+            else:
+                # Fallback se utente non ha ancora completato onboarding
+                business_name = "Upload Manuale"
+                logger.warning(f"User {telegram_id} non ha business_name valido, usando fallback")
+                
+                # Avvisa utente se non ha completato onboarding
+                if not user or not user.onboarding_completed:
+                    await update.message.reply_text(
+                        "⚠️ **Attenzione:** Non hai ancora completato l'onboarding.\n\n"
+                        "Per caricare il tuo inventario con il nome corretto del locale, completa prima l'onboarding con `/start`.\n\n"
+                        "Altrimenti i dati verranno salvati temporaneamente con nome 'Upload Manuale'."
+                    )
             
             # Invia file e ottieni job_id
             job_response = await processor_client.process_inventory(
