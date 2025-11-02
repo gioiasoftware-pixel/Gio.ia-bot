@@ -55,10 +55,27 @@ def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
             r'aggiunto (\d+) (.+)',
         ]
         
-        # Verifica onboarding completato
+        # Verifica se utente esiste e ha business_name valido + inventario
         user = db_manager.get_user_by_telegram_id(telegram_id)
-        if not user or not user.onboarding_completed:
-            return None  # Non processare movimenti se onboarding non completato
+        if not user:
+            return None  # Utente non trovato
+        
+        # Verifica business_name valido (non null e non "Upload Manuale")
+        if not user.business_name or user.business_name == "Upload Manuale":
+            return None  # Business name non valido
+        
+        # Verifica che l'inventario abbia almeno 1 vino
+        user_wines = db_manager.get_user_wines(telegram_id)
+        if not user_wines or len(user_wines) == 0:
+            return None  # Inventario vuoto
+        
+        # Se onboarding non completato ma condizioni sono soddisfatte, completa automaticamente
+        if not user.onboarding_completed:
+            db_manager.update_user_onboarding(
+                telegram_id=telegram_id,
+                onboarding_completed=True
+            )
+            logger.info(f"[AI-MOVEMENT] Onboarding completato automaticamente per {telegram_id} (business_name={user.business_name}, {len(user_wines)} vini)")
         
         # Cerca pattern consumo
         for pattern in consumo_patterns:

@@ -170,6 +170,14 @@ class FileUploadManager:
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
+                
+                # Se inventario caricato con successo e business_name valido, completa onboarding
+                if error_count == 0 and business_name and business_name != "Upload Manuale":
+                    db_manager.update_user_onboarding(
+                        telegram_id=telegram_id,
+                        onboarding_completed=True
+                    )
+                    logger.info(f"Onboarding completato automaticamente dopo upload inventario per {telegram_id}/{business_name}")
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 if not error_msg or error_msg == '...':
@@ -328,6 +336,14 @@ class FileUploadManager:
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
+                
+                # Se inventario caricato con successo e business_name valido, completa onboarding
+                if error_count == 0 and business_name and business_name != "Upload Manuale":
+                    db_manager.update_user_onboarding(
+                        telegram_id=telegram_id,
+                        onboarding_completed=True
+                    )
+                    logger.info(f"Onboarding completato automaticamente dopo upload OCR per {telegram_id}/{business_name}")
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 if not error_msg or error_msg == '...':

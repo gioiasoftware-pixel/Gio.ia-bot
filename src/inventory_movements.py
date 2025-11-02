@@ -54,17 +54,32 @@ class InventoryMovementManager:
         
         logger.info(f"[MOVEMENT] Checking movement patterns for message: {message_text}")
         
-        # Verifica se l'onboarding è completato
+        # Verifica se utente esiste e ha business_name valido + inventario
         user_db = db_manager.get_user_by_telegram_id(telegram_id)
         if not user_db:
             logger.warning(f"[MOVEMENT] User {telegram_id} not found in database, skipping movement check")
             return False
         
-        if not user_db.onboarding_completed:
-            logger.info(f"[MOVEMENT] User {telegram_id} onboarding not completed (onboarding_completed={user_db.onboarding_completed}), skipping movement check")
+        # Verifica business_name valido (non null e non "Upload Manuale")
+        if not user_db.business_name or user_db.business_name == "Upload Manuale":
+            logger.info(f"[MOVEMENT] User {telegram_id} non ha business_name valido, skipping movement check")
             return False
         
-        logger.info(f"[MOVEMENT] User {telegram_id} onboarding completed, checking patterns...")
+        # Verifica che l'inventario abbia almeno 1 vino
+        user_wines = db_manager.get_user_wines(telegram_id)
+        if not user_wines or len(user_wines) == 0:
+            logger.info(f"[MOVEMENT] User {telegram_id} non ha vini nell'inventario, skipping movement check")
+            return False
+        
+        logger.info(f"[MOVEMENT] User {telegram_id} ha business_name '{user_db.business_name}' e {len(user_wines)} vini, checking patterns...")
+        
+        # Se onboarding non completato ma condizioni sono soddisfatte, completa automaticamente
+        if not user_db.onboarding_completed:
+            db_manager.update_user_onboarding(
+                telegram_id=telegram_id,
+                onboarding_completed=True
+            )
+            logger.info(f"[MOVEMENT] Onboarding completato automaticamente per {telegram_id} (business_name={user_db.business_name}, {len(user_wines)} vini)")
         
         # Cerca pattern di consumo
         for pattern in self.consumo_patterns:
