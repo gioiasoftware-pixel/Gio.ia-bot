@@ -86,47 +86,50 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
-            # Invia movimento al processor
+            # Invia movimento al processor (job asincrono)
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
                 business_name=business_name,
                 wine_name=wine_name,
                 movement_type='consumo',
-                quantity=quantity,
-                notes=f"Vendita/consumo di {quantity} bottiglie"
+                quantity=quantity
             )
             
             if result.get('status') == 'success':
                 success_message = (
                     f"✅ **Consumo registrato**\n\n"
                     f"🍷 **Vino:** {result.get('wine_name')}\n"
-                    f"🏭 **Produttore:** {result.get('wine_producer', 'N/A')}\n"
                     f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
                     f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                    f"💾 **Log salvato** nel sistema"
+                    f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
-            elif result.get('error') == 'wine_not_found':
-                await update.message.reply_text(
-                    f"❌ **Vino non trovato**\n\n"
-                    f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                    f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
-                )
-            elif result.get('error') == 'insufficient_quantity':
-                await update.message.reply_text(
-                    f"⚠️ **Quantità insufficiente**\n\n"
-                    f"**{result.get('wine_name')}**\n"
-                    f"📦 Disponibili: {result.get('available_quantity')} bottiglie\n"
-                    f"🍷 Richieste: {quantity} bottiglie\n\n"
-                    f"💡 Verifica la quantità o aggiorna l'inventario."
-                )
             else:
-                error_msg = result.get('error', 'Errore sconosciuto')
-                await update.message.reply_text(
-                    f"❌ **Errore durante l'aggiornamento**\n\n"
-                    f"{error_msg}\n\n"
-                    f"Riprova più tardi."
-                )
+                # Gestione errori dal job
+                error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                # Cerca messaggi di errore specifici nel result_data
+                if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
+                    await update.message.reply_text(
+                        f"❌ **Vino non trovato**\n\n"
+                        f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
+                        f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
+                    )
+                elif 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
+                    # Estrai quantità disponibile se presente
+                    available_qty = result.get('available_quantity', 'N/A')
+                    await update.message.reply_text(
+                        f"⚠️ **Quantità insufficiente**\n\n"
+                        f"📦 Disponibili: {available_qty} bottiglie\n"
+                        f"🍷 Richieste: {quantity} bottiglie\n\n"
+                        f"💡 Verifica la quantità o aggiorna l'inventario."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ **Errore durante l'aggiornamento**\n\n"
+                        f"{error_msg[:200]}\n\n"
+                        f"Riprova più tardi."
+                    )
             
             return True
             
@@ -152,40 +155,42 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
-            # Invia movimento al processor
+            # Invia movimento al processor (job asincrono)
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
                 business_name=business_name,
                 wine_name=wine_name,
                 movement_type='rifornimento',
-                quantity=quantity,
-                notes=f"Rifornimento di {quantity} bottiglie"
+                quantity=quantity
             )
             
             if result.get('status') == 'success':
                 success_message = (
                     f"✅ **Rifornimento registrato**\n\n"
                     f"🍷 **Vino:** {result.get('wine_name')}\n"
-                    f"🏭 **Produttore:** {result.get('wine_producer', 'N/A')}\n"
                     f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
                     f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                    f"💾 **Log salvato** nel sistema"
+                    f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
-            elif result.get('error') == 'wine_not_found':
-                await update.message.reply_text(
-                    f"❌ **Vino non trovato**\n\n"
-                    f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                    f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
-                    f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
-                )
             else:
-                error_msg = result.get('error', 'Errore sconosciuto')
-                await update.message.reply_text(
-                    f"❌ **Errore durante l'aggiornamento**\n\n"
-                    f"{error_msg}\n\n"
-                    f"Riprova più tardi."
-                )
+                # Gestione errori dal job
+                error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                # Cerca messaggi di errore specifici nel result_data
+                if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
+                    await update.message.reply_text(
+                        f"❌ **Vino non trovato**\n\n"
+                        f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
+                        f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
+                        f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ **Errore durante l'aggiornamento**\n\n"
+                        f"{error_msg[:200]}\n\n"
+                        f"Riprova più tardi."
+                    )
             
             return True
             
