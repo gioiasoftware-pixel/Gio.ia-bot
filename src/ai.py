@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database import db_manager
@@ -36,6 +37,8 @@ def get_ai_response(prompt: str, telegram_id: int = None) -> str:
     try:
         # Prepara il contesto utente se disponibile
         user_context = ""
+        specific_wine_info = ""  # Per vini cercati specificamente
+        
         if telegram_id:
             try:
                 user = db_manager.get_user_by_telegram_id(telegram_id)
@@ -48,28 +51,60 @@ INFORMAZIONI UTENTE:
 
 INVENTARIO ATTUALE:
 """
-                    # Ottieni inventario COMPLETO (non limitato)
+                    # Rileva se l'utente sta chiedendo informazioni su un vino specifico
+                    wine_search_patterns = [
+                        r'quanti (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
+                        r'quanto (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
+                        r'a quanto (?:vendo|vendi|costano|costano|prezzo) (.+?)',
+                        r'prezzo (.+?)',
+                        r'(.+?) (?:in cantina|in magazzino|ho|hai|quantità)',
+                        r'(?:informazioni|dettagli|info) (?:su|del|dello|della) (.+?)',
+                    ]
+                    
+                    wine_search_term = None
+                    for pattern in wine_search_patterns:
+                        match = re.search(pattern, prompt.lower())
+                        if match:
+                            wine_search_term = match.group(1).strip()
+                            # Rimuovi parole comuni
+                            wine_search_term = re.sub(r'\b(ho|hai|in|cantina|magazzino|quanti|quanto|vendo|prezzo|informazioni|dettagli|info|su|del|dello|della)\b', '', wine_search_term).strip()
+                            if wine_search_term:
+                                logger.info(f"Rilevata ricerca vino specifico: '{wine_search_term}'")
+                                break
+                    
+                    # Se è stata rilevata una ricerca, cerca nel database
+                    if wine_search_term:
+                        found_wines = db_manager.search_wines(telegram_id, wine_search_term, limit=5)
+                        if found_wines:
+                            specific_wine_info = "\n\nVINI TROVATI NEL DATABASE PER LA RICERCA:\n"
+                            for wine in found_wines:
+                                info_parts = [f"- {wine.name}"]
+                                if wine.vintage:
+                                    info_parts.append(f"Annata: {wine.vintage}")
+                                if wine.producer:
+                                    info_parts.append(f"Produttore: {wine.producer}")
+                                if wine.quantity is not None:
+                                    info_parts.append(f"Quantità: {wine.quantity} bottiglie")
+                                if wine.selling_price:
+                                    info_parts.append(f"Prezzo vendita: €{wine.selling_price:.2f}")
+                                if wine.cost_price:
+                                    info_parts.append(f"Prezzo acquisto: €{wine.cost_price:.2f}")
+                                if wine.region:
+                                    info_parts.append(f"Regione: {wine.region}")
+                                if wine.country:
+                                    info_parts.append(f"Paese: {wine.country}")
+                                specific_wine_info += " | ".join(info_parts) + "\n"
+                        else:
+                            specific_wine_info = f"\n\nNESSUN VINO TROVATO nel database per '{wine_search_term}'\n"
+                    
+                    # Ottieni statistiche inventario (non tutti i vini)
                     wines = db_manager.get_user_wines(telegram_id)
                     if wines:
                         user_context += f"- Totale vini: {len(wines)}\n"
                         user_context += f"- Quantità totale: {sum(w.quantity for w in wines)} bottiglie\n"
                         low_stock = [w for w in wines if w.quantity <= w.min_quantity]
-                        user_context += f"- Scorte basse: {len(low_stock)} vini\n\n"
-                        
-                        # Aggiungi TUTTI i vini per ricerca completa (max 100 per limitare token)
-                        # Se ci sono più di 100 vini, mostra i primi 100 e indica che ce ne sono altri
-                        wines_to_show = wines[:100]
-                        user_context += f"DETTAGLI VINI ({len(wines_to_show)}/{len(wines)}):\n"
-                        for wine in wines_to_show:
-                            status = "⚠️ SCORTA BASSA" if wine.quantity <= wine.min_quantity else "✅ OK"
-                            vintage_str = f" {wine.vintage}" if wine.vintage else ""
-                            user_context += f"- {wine.name}{vintage_str}"
-                            if wine.producer:
-                                user_context += f" ({wine.producer})"
-                            user_context += f" - {wine.quantity} bottiglie {status}\n"
-                        
-                        if len(wines) > 100:
-                            user_context += f"... e altri {len(wines) - 100} vini (usa ricerca specifica se necessario)\n"
+                        user_context += f"- Scorte basse: {len(low_stock)} vini\n"
+                        user_context += "\nNOTA: I dettagli dei vini specifici vengono cercati direttamente nel database quando richiesto.\n"
                     else:
                         user_context += "- Inventario vuoto\n"
                     
@@ -90,7 +125,7 @@ INVENTARIO ATTUALE:
         # Sistema prompt con contesto
         system_prompt = f"""Sei Gio.ia-bot, un assistente AI specializzato nella gestione inventario vini. Sei gentile, professionale e parli in italiano.
 
-{user_context}
+{user_context}{specific_wine_info}
 
 CAPACITÀ:
 - Analizzare l'inventario dell'utente in tempo reale

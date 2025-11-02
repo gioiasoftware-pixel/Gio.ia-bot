@@ -270,6 +270,82 @@ class DatabaseManager:
                 except:
                     return []
     
+    def search_wines(self, telegram_id: int, search_term: str, limit: int = 10) -> List[Wine]:
+        """
+        Cerca vini nell'inventario per nome, produttore o regione (fuzzy search).
+        Cerca direttamente nel database invece che nel contesto.
+        """
+        with self.get_session() as session:
+            user = session.query(User).filter(User.telegram_id == telegram_id).first()
+            if not user or not user.business_name:
+                logger.warning(f"User {telegram_id} non trovato o business_name mancante")
+                return []
+            
+            # Costruisci nome tabella dinamica
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                from sqlalchemy import text as sql_text
+                
+                # Query SQL raw con ricerca fuzzy (LIKE case-insensitive)
+                search_pattern = f"%{search_term}%"
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    AND (
+                        LOWER(name) LIKE LOWER(:search_pattern)
+                        OR LOWER(producer) LIKE LOWER(:search_pattern)
+                        OR LOWER(region) LIKE LOWER(:search_pattern)
+                        OR LOWER(country) LIKE LOWER(:search_pattern)
+                    )
+                    ORDER BY name
+                    LIMIT :limit
+                """)
+                
+                result = session.execute(query, {
+                    "user_id": user.id,
+                    "search_pattern": search_pattern,
+                    "limit": limit
+                })
+                rows = result.fetchall()
+                
+                # Converti le righe in oggetti Wine
+                wines = []
+                for row in rows:
+                    wine_dict = {
+                        'id': row.id,
+                        'user_id': row.user_id,
+                        'name': row.name,
+                        'producer': row.producer,
+                        'vintage': row.vintage,
+                        'grape_variety': row.grape_variety,
+                        'region': row.region,
+                        'country': row.country,
+                        'wine_type': row.wine_type,
+                        'classification': row.classification,
+                        'quantity': row.quantity,
+                        'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                        'cost_price': row.cost_price,
+                        'selling_price': row.selling_price,
+                        'alcohol_content': row.alcohol_content,
+                        'description': row.description,
+                        'notes': row.notes,
+                        'created_at': row.created_at,
+                        'updated_at': row.updated_at
+                    }
+                    
+                    wine = Wine()
+                    for key, value in wine_dict.items():
+                        setattr(wine, key, value)
+                    wines.append(wine)
+                
+                logger.info(f"Trovati {len(wines)} vini per ricerca '{search_term}' per {telegram_id}/{user.business_name}")
+                return wines
+                
+            except Exception as e:
+                logger.error(f"Errore ricerca vini da tabella dinamica {table_name}: {e}")
+                return []
+    
     def add_wine(self, telegram_id: int, wine_data: Dict[str, Any]) -> Optional[Wine]:
         """Aggiungi un vino all'inventario"""
         with self.get_session() as session:
