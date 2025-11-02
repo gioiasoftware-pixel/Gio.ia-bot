@@ -152,18 +152,25 @@ class ProcessorClient:
             }
     
     async def wait_for_job_completion(self, job_id: str, max_wait_seconds: int = 3600, 
-                                      poll_interval: int = 15) -> Dict[str, Any]:
+                                      poll_interval: int = 30, max_retries: int = 5) -> Dict[str, Any]:
         """
-        Attende completamento job con polling.
+        Attende completamento job con polling e retry logic.
         Ritorna risultato quando job è completato o errore.
+        
+        Args:
+            job_id: ID del job da monitorare
+            max_wait_seconds: Tempo massimo di attesa complessivo (default: 1 ora)
+            poll_interval: Intervallo tra un poll e l'altro (default: 30s)
+            max_retries: Numero massimo di tentativi consecutivi falliti prima di dare errore (default: 5)
         """
         import time
         start_time = time.time()
+        consecutive_failures = 0  # Contatore tentativi falliti consecutivi
         
-        logger.info(f"Waiting for job {job_id} to complete (max {max_wait_seconds}s, poll every {poll_interval}s)")
+        logger.info(f"Waiting for job {job_id} to complete (max {max_wait_seconds}s, poll every {poll_interval}s, max {max_retries} retries)")
         
         while True:
-            # Controlla timeout
+            # Controlla timeout globale
             elapsed = time.time() - start_time
             if elapsed > max_wait_seconds:
                 logger.error(f"Job {job_id} timeout after {max_wait_seconds} seconds")
@@ -173,25 +180,44 @@ class ProcessorClient:
                     "job_id": job_id
                 }
             
-            # Poll status
+            # Poll status con retry logic
+            status = None
             try:
                 status = await self.get_job_status(job_id)
+                # Se la richiesta riesce, reset contatore errori
+                consecutive_failures = 0
             except Exception as e:
-                logger.error(f"Exception calling get_job_status for {job_id}: {e}", exc_info=True)
-                return {
-                    "status": "error",
-                    "error": f"Error polling job status: {str(e)}",
-                    "job_id": job_id
-                }
+                consecutive_failures += 1
+                logger.warning(f"Attempt {consecutive_failures}/{max_retries} failed for job {job_id}: {type(e).__name__}: {str(e)}")
+                
+                # Se abbiamo esaurito i tentativi, dai errore
+                if consecutive_failures >= max_retries:
+                    logger.error(f"Job {job_id}: Max retries ({max_retries}) reached. Giving up.")
+                    return {
+                        "status": "error",
+                        "error": f"Error polling job status dopo {max_retries} tentativi: {str(e)}",
+                        "job_id": job_id
+                    }
+                
+                # Altrimenti aspetta un po' prima di riprovare (exponential backoff)
+                retry_delay = min(poll_interval * consecutive_failures, 60)  # Max 60s di attesa
+                logger.info(f"Job {job_id}: Retrying in {retry_delay}s (attempt {consecutive_failures + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+                continue  # Riprova senza processare status
             
             # Verifica che status sia un dict valido
             if not isinstance(status, dict):
-                logger.error(f"Invalid status response for job {job_id}: {type(status)} = {status}")
-                return {
-                    "status": "error",
-                    "error": "Invalid response format from processor",
-                    "job_id": job_id
-                }
+                consecutive_failures += 1
+                logger.warning(f"Invalid status response for job {job_id}: {type(status)} = {status} (attempt {consecutive_failures}/{max_retries})")
+                
+                if consecutive_failures >= max_retries:
+                    return {
+                        "status": "error",
+                        "error": "Invalid response format from processor",
+                        "job_id": job_id
+                    }
+                await asyncio.sleep(poll_interval)
+                continue
             
             job_status = status.get("status")
             
@@ -199,7 +225,7 @@ class ProcessorClient:
                 # Job completato - ritorna risultato
                 result = status.get("result", {})
                 if not isinstance(result, dict):
-                    logger.error(f"Invalid result format for job {job_id}: {type(result)} = {result}")
+                    logger.warning(f"Invalid result format for job {job_id}: {type(result)} = {result}")
                     # Prova a costruire risultato dai campi diretti di status
                     result = {
                         "status": "success",
@@ -212,9 +238,9 @@ class ProcessorClient:
                 logger.info(f"Job {job_id} completed: {result.get('saved_wines', 0)} wines saved")
                 return result
             elif job_status == "error":
-                # Job errore
+                # Job errore (dal processor)
                 error_msg = status.get("error", "Unknown error")
-                logger.error(f"Job {job_id} error: {error_msg}")
+                logger.error(f"Job {job_id} error from processor: {error_msg}")
                 return {
                     "status": "error",
                     "error": error_msg,

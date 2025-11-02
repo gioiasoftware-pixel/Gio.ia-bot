@@ -275,7 +275,7 @@ class FileUploadManager:
             result = await processor_client.wait_for_job_completion(
                 job_id=job_id,
                 max_wait_seconds=3600,  # 1 ora massimo
-                poll_interval=15  # Poll ogni 15 secondi (ridotto per evitare timeout)
+                poll_interval=30  # Poll ogni 30 secondi
             )
             
             # Elimina messaggio progress
