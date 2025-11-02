@@ -381,7 +381,7 @@ class ProcessorClient:
                         logger.info(f"Movement job created: {job_id} for {telegram_id}/{business_name} - {movement_type} {quantity} {wine_name}")
                         
                         # Attendi completamento job
-                        return await self.wait_for_job_completion(job_id, max_wait_seconds=60, poll_interval=2)
+                        return await self.wait_for_job_completion(job_id, max_wait_seconds=120, poll_interval=30)
                     else:
                         error_text = await response.text()
                         logger.error(f"Error creating movement job HTTP {response.status}: {error_text}")
