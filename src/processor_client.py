@@ -107,7 +107,8 @@ class ProcessorClient:
         Ottieni stato elaborazione per job_id
         """
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            # Timeout aumentato a 30s per permettere al processor di rispondere anche se lento
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30, connect=10)) as session:
                 async with session.get(f"{self.base_url}/status/{job_id}") as response:
                     if response.status == 200:
                         try:
@@ -151,7 +152,7 @@ class ProcessorClient:
             }
     
     async def wait_for_job_completion(self, job_id: str, max_wait_seconds: int = 3600, 
-                                      poll_interval: int = 10) -> Dict[str, Any]:
+                                      poll_interval: int = 15) -> Dict[str, Any]:
         """
         Attende completamento job con polling.
         Ritorna risultato quando job è completato o errore.
