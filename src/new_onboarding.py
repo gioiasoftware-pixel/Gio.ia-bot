@@ -233,30 +233,62 @@ class NewOnboardingManager:
         telegram_id = update.effective_user.id
         business_name = update.message.text.strip()
         
-        # Salva il nome del locale
-        context.user_data['onboarding_data'] = context.user_data.get('onboarding_data', {})
-        context.user_data['onboarding_data']['business_name'] = business_name
-        
-        # Crea le tabelle nel database quando viene dato il nome del locale
+        # PRIMA: Salva business_name nel database (completa onboarding sulla tabella User)
         try:
             await update.message.reply_text(
                 f"✅ **Perfetto! {business_name}** ricevuto!\n\n"
+                f"💾 Sto salvando i dati..."
+            )
+            
+            success = db_manager.update_user_onboarding(
+                telegram_id=telegram_id,
+                business_name=business_name
+            )
+            
+            if not success:
+                logger.error(f"Impossibile salvare business_name per {telegram_id}")
+                await update.message.reply_text(
+                    f"⚠️ **Errore salvataggio dati**\n\n"
+                    f"Non è stato possibile salvare il nome del locale.\n"
+                    f"Riprova o contatta il supporto."
+                )
+                return
+            
+            logger.info(f"Business name '{business_name}' salvato nel database per {telegram_id}")
+            
+        except Exception as e:
+            logger.error(f"Error saving business_name: {e}")
+            await update.message.reply_text(
+                f"⚠️ **Errore salvataggio dati**\n\n"
+                f"Riprova più tardi o contatta il supporto."
+            )
+            return
+        
+        # SECONDA: Recupera business_name dal database (garantisce consistenza)
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            logger.error(f"Business name non trovato nel database per {telegram_id} dopo il salvataggio")
+            await update.message.reply_text(
+                f"⚠️ **Errore**: Nome locale non trovato nel database.\n"
+                f"Riprova con `/start`."
+            )
+            return
+        
+        business_name_from_db = user.business_name
+        logger.info(f"Recuperato business_name dal database: '{business_name_from_db}' per {telegram_id}")
+        
+        # TERZA: Crea le tabelle usando business_name dal database
+        try:
+            await update.message.reply_text(
                 f"🔧 Sto configurando il database..."
             )
             
-            result = await processor_client.create_tables(telegram_id, business_name)
+            result = await processor_client.create_tables(telegram_id, business_name_from_db)
             
             if result.get('status') == 'success':
-                # SALVA business_name nel database utente subito dopo la creazione delle tabelle
-                success = db_manager.update_user_onboarding(
-                    telegram_id=telegram_id,
-                    business_name=business_name
-                )
-                
-                if not success:
-                    logger.warning(f"Impossibile salvare business_name per {telegram_id}, ma le tabelle sono state create")
-                else:
-                    logger.info(f"Business name '{business_name}' salvato nel database per {telegram_id}")
+                # Salva anche nel context per compatibilità
+                context.user_data['onboarding_data'] = context.user_data.get('onboarding_data', {})
+                context.user_data['onboarding_data']['business_name'] = business_name_from_db
                 
                 await update.message.reply_text(
                     f"✅ **Database configurato!**\n\n"
@@ -282,7 +314,7 @@ class NewOnboardingManager:
         # Imposta stato per ricevere file
         context.user_data['onboarding_step'] = 'waiting_inventory_file'
         
-        logger.info(f"Nome locale ricevuto da {telegram_id}: {business_name}")
+        logger.info(f"Nome locale ricevuto e salvato: {business_name_from_db} (ID: {telegram_id})")
     
     async def _handle_inventory_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce l'upload del file inventario"""
@@ -290,7 +322,17 @@ class NewOnboardingManager:
         
         telegram_id = update.effective_user.id
         document = update.message.document
-        business_name = context.user_data.get('onboarding_data', {}).get('business_name', 'Temporaneo')
+        
+        # Recupera business_name dal database (non dal context)
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            await update.message.reply_text(
+                "⚠️ **Errore**: Nome locale non trovato.\n"
+                "Completa prima l'onboarding con `/start`."
+            )
+            return
+        
+        business_name = user.business_name
         
         # Ringrazia per il file
         await update.message.reply_text(
@@ -308,14 +350,24 @@ class NewOnboardingManager:
         
         logger.info(f"File inventario ricevuto da {telegram_id}: {document.file_name}")
         
-        # ELABORA IMMEDIATAMENTE IL FILE con nome corretto
+        # ELABORA IMMEDIATAMENTE IL FILE con nome corretto dal database
         await self._process_inventory_immediately(update, context, business_name)
     
     async def _handle_inventory_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Gestisce l'upload della foto inventario"""
         telegram_id = update.effective_user.id
         photo = update.message.photo[-1]  # Prendi la foto più grande
-        business_name = context.user_data.get('onboarding_data', {}).get('business_name', 'Temporaneo')
+        
+        # Recupera business_name dal database (non dal context)
+        user = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            await update.message.reply_text(
+                "⚠️ **Errore**: Nome locale non trovato.\n"
+                "Completa prima l'onboarding con `/start`."
+            )
+            return
+        
+        business_name = user.business_name
         
         # Ringrazia per la foto
         await update.message.reply_text(
@@ -332,7 +384,7 @@ class NewOnboardingManager:
         
         logger.info(f"Foto inventario ricevuta da {telegram_id}")
         
-        # ELABORA IMMEDIATAMENTE LA FOTO con nome corretto
+        # ELABORA IMMEDIATAMENTE LA FOTO con nome corretto dal database
         await self._process_inventory_immediately(update, context, business_name)
     
     async def _process_inventory_immediately(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
@@ -447,10 +499,21 @@ class NewOnboardingManager:
         telegram_id = update.effective_user.id
         
         try:
-            # Aggiorna utente con nome locale e completa onboarding
+            # Recupera business_name dal database (garantisce consistenza)
+            user = db_manager.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                logger.error(f"Business name non trovato nel database per {telegram_id}")
+                await update.message.reply_text(
+                    "❌ **Errore**: Nome locale non trovato nel database.\n"
+                    "Riprova con `/start`."
+                )
+                return
+            
+            business_name_from_db = user.business_name
+            
+            # Completa onboarding (business_name già salvato, aggiorna solo onboarding_completed)
             db_manager.update_user_onboarding(
                 telegram_id=telegram_id,
-                business_name=business_name,
                 onboarding_completed=True
             )
             
@@ -460,7 +523,7 @@ class NewOnboardingManager:
             
             message = (
                 f"🎉 **Onboarding completato con successo!**\n\n"
-                f"🏢 **{business_name}** è ora configurato!\n\n"
+                f"🏢 **{business_name_from_db}** è ora configurato!\n\n"
                 f"✅ **{processed_wines} vini** elaborati e salvati\n"
             )
             
@@ -487,7 +550,7 @@ class NewOnboardingManager:
             context.user_data.pop('processed_wines', None)
             context.user_data.pop('inventory_processed', None)
             
-            logger.info(f"Onboarding completato per {business_name} (ID: {telegram_id})")
+            logger.info(f"Onboarding completato per {business_name_from_db} (ID: {telegram_id})")
             
         except Exception as e:
             logger.error(f"Errore completamento onboarding: {e}")
