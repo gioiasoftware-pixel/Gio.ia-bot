@@ -287,26 +287,58 @@ class DatabaseManager:
             try:
                 from sqlalchemy import text as sql_text
                 
-                # Query SQL raw con ricerca fuzzy (LIKE case-insensitive)
+                # Query SQL raw con ricerca fuzzy (LIKE case-insensitive) su TUTTI i campi
                 search_pattern = f"%{search_term}%"
+                
+                # Prova anche a convertire search_term in numeri per ricerca prezzi/gradazione/annata
+                search_numeric = None
+                search_float = None
+                try:
+                    # Prova intero (per vintage)
+                    search_numeric = int(search_term)
+                except ValueError:
+                    try:
+                        # Prova float (per prezzi o gradazione)
+                        search_float = float(search_term.replace(',', '.'))
+                    except ValueError:
+                        pass
+                
+                # Costruisci query con tutti i campi di ricerca
+                query_conditions = [
+                    "LOWER(name) LIKE LOWER(:search_pattern)",
+                    "LOWER(producer) LIKE LOWER(:search_pattern)",
+                    "LOWER(region) LIKE LOWER(:search_pattern)",
+                    "LOWER(country) LIKE LOWER(:search_pattern)",
+                    "LOWER(wine_type) LIKE LOWER(:search_pattern)",
+                    "LOWER(classification) LIKE LOWER(:search_pattern)",
+                    "LOWER(grape_variety) LIKE LOWER(:search_pattern)"
+                ]
+                
+                # Aggiungi condizioni numeriche se disponibili
+                query_params = {
+                    "user_id": user.id,
+                    "search_pattern": search_pattern,
+                    "limit": limit
+                }
+                
+                if search_numeric is not None:
+                    query_conditions.append("vintage = :search_numeric")
+                    query_params["search_numeric"] = search_numeric
+                
+                if search_float is not None:
+                    query_conditions.append("(ABS(cost_price - :search_float) < 0.01 OR ABS(selling_price - :search_float) < 0.01)")
+                    query_conditions.append("(ABS(alcohol_content - :search_float) < 0.1)")
+                    query_params["search_float"] = search_float
+                
                 query = sql_text(f"""
                     SELECT * FROM {table_name} 
                     WHERE user_id = :user_id
-                    AND (
-                        LOWER(name) LIKE LOWER(:search_pattern)
-                        OR LOWER(producer) LIKE LOWER(:search_pattern)
-                        OR LOWER(region) LIKE LOWER(:search_pattern)
-                        OR LOWER(country) LIKE LOWER(:search_pattern)
-                    )
+                    AND ({' OR '.join(query_conditions)})
                     ORDER BY name
                     LIMIT :limit
                 """)
                 
-                result = session.execute(query, {
-                    "user_id": user.id,
-                    "search_pattern": search_pattern,
-                    "limit": limit
-                })
+                result = session.execute(query, query_params)
                 rows = result.fetchall()
                 
                 # Converti le righe in oggetti Wine
