@@ -15,11 +15,14 @@ class InventoryMovementManager:
     """Gestore movimenti inventario"""
     
     def __init__(self):
-        # Pattern per riconoscere movimenti
+        # Pattern per riconoscere movimenti (ordinati dalla più specifica alla più generica)
         self.consumo_patterns = [
             r'ho venduto (\d+) bottiglie? di (.+)',
             r'ho consumato (\d+) bottiglie? di (.+)',
             r'ho bevuto (\d+) bottiglie? di (.+)',
+            r'ho venduto (\d+) (.+)',  # Senza "bottiglie di"
+            r'ho consumato (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
+            r'ho bevuto (\d+) (.+)',    # Senza "bottiglie di"
             r'venduto (\d+) (.+)',
             r'consumato (\d+) (.+)',
             r'bevuto (\d+) (.+)',
@@ -32,6 +35,9 @@ class InventoryMovementManager:
             r'ho ricevuto (\d+) bottiglie? di (.+)',
             r'ho comprato (\d+) bottiglie? di (.+)',
             r'ho aggiunto (\d+) bottiglie? di (.+)',
+            r'ho ricevuto (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
+            r'ho comprato (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
+            r'ho aggiunto (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
             r'ricevuto (\d+) (.+)',
             r'comprato (\d+) (.+)',
             r'aggiunto (\d+) (.+)',
@@ -46,9 +52,12 @@ class InventoryMovementManager:
         telegram_id = user.id
         message_text = update.message.text.lower().strip()
         
+        logger.info(f"Checking movement patterns for message: {message_text}")
+        
         # Verifica se l'onboarding è completato
         user_db = db_manager.get_user_by_telegram_id(telegram_id)
         if not user_db or not user_db.onboarding_completed:
+            logger.debug(f"User {telegram_id} onboarding not completed, skipping movement check")
             return False
         
         # Cerca pattern di consumo
@@ -57,6 +66,7 @@ class InventoryMovementManager:
             if match:
                 quantity = int(match.group(1))
                 wine_name = match.group(2).strip()
+                logger.info(f"Matched consumo pattern: '{pattern}' -> quantity={quantity}, wine={wine_name}")
                 return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
         
         # Cerca pattern di rifornimento
@@ -65,8 +75,10 @@ class InventoryMovementManager:
             if match:
                 quantity = int(match.group(1))
                 wine_name = match.group(2).strip()
+                logger.info(f"Matched rifornimento pattern: '{pattern}' -> quantity={quantity}, wine={wine_name}")
                 return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
         
+        logger.debug(f"No movement pattern matched for message: {message_text}")
         return False
     
     async def _process_consumo(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 

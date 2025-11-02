@@ -48,7 +48,7 @@ INFORMAZIONI UTENTE:
 
 INVENTARIO ATTUALE:
 """
-                    # Ottieni inventario
+                    # Ottieni inventario COMPLETO (non limitato)
                     wines = db_manager.get_user_wines(telegram_id)
                     if wines:
                         user_context += f"- Totale vini: {len(wines)}\n"
@@ -56,14 +56,20 @@ INVENTARIO ATTUALE:
                         low_stock = [w for w in wines if w.quantity <= w.min_quantity]
                         user_context += f"- Scorte basse: {len(low_stock)} vini\n\n"
                         
-                        # Aggiungi dettagli vini (max 10 per limitare token)
-                        user_context += "DETTAGLI VINI PRINCIPALI:\n"
-                        for wine in wines[:10]:
+                        # Aggiungi TUTTI i vini per ricerca completa (max 100 per limitare token)
+                        # Se ci sono più di 100 vini, mostra i primi 100 e indica che ce ne sono altri
+                        wines_to_show = wines[:100]
+                        user_context += f"DETTAGLI VINI ({len(wines_to_show)}/{len(wines)}):\n"
+                        for wine in wines_to_show:
                             status = "⚠️ SCORTA BASSA" if wine.quantity <= wine.min_quantity else "✅ OK"
-                            user_context += f"- {wine.name} ({wine.producer}) - {wine.quantity} bottiglie {status}\n"
+                            vintage_str = f" {wine.vintage}" if wine.vintage else ""
+                            user_context += f"- {wine.name}{vintage_str}"
+                            if wine.producer:
+                                user_context += f" ({wine.producer})"
+                            user_context += f" - {wine.quantity} bottiglie {status}\n"
                         
-                        if len(wines) > 10:
-                            user_context += f"... e altri {len(wines) - 10} vini\n"
+                        if len(wines) > 100:
+                            user_context += f"... e altri {len(wines) - 100} vini (usa ricerca specifica se necessario)\n"
                     else:
                         user_context += "- Inventario vuoto\n"
                     
