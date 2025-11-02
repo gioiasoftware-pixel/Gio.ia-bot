@@ -65,9 +65,10 @@ Esempi:
 - "quanti vini ho?" → {{"is_movement": false, "type": null, "quantity": null, "wine_name": null}}
 """
         
+        # Usa OPENAI_MODEL dal modulo (già importato)
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_MODEL,  # Importato da .config all'inizio del file
             messages=[
                 {"role": "system", "content": "Sei un analizzatore di messaggi. Rispondi SOLO con JSON valido, senza testo aggiuntivo."},
                 {"role": "user", "content": movement_detection_prompt}
@@ -302,13 +303,20 @@ INFORMAZIONI UTENTE:
 INVENTARIO ATTUALE:
 """
                     # Rileva se l'utente sta chiedendo informazioni su un vino specifico
+                    # Pattern ordinati dalla più specifica alla più generica
                     wine_search_patterns = [
-                        r'quanti (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
-                        r'quanto (.+?) (?:ho|hai|ci sono|in cantina|in magazzino)',
-                        r'a quanto (?:vendo|vendi|costano|costano|prezzo) (.+?)',
-                        r'prezzo (.+?)',
-                        r'(.+?) (?:in cantina|in magazzino|ho|hai|quantità)',
-                        r'(?:informazioni|dettagli|info) (?:su|del|dello|della) (.+?)',
+                        # Pattern 1: "quanti/quante bottiglie di X ho/hai" (MOLTO SPECIFICO)
+                        r'(?:quanti|quante)\s+bottiglie?\s+di\s+(.+?)(?:\s+ho|\s+hai|\s+ci\s+sono|\s+in\s+cantina|\s+in\s+magazzino|\s+quantità|$)',
+                        # Pattern 2: "quanti/quante X ho/hai" (senza "bottiglie")
+                        r'(?:quanti|quante)\s+(.+?)(?:\s+ho|\s+hai|\s+ci\s+sono|\s+in\s+cantina|\s+in\s+magazzino|\s+quantità|$)',
+                        # Pattern 3: "a quanto vendo/vendi X" (prezzo)
+                        r'a\s+quanto\s+(?:vendo|vendi|costano|prezzo)\s+(.+)',
+                        # Pattern 4: "prezzo X"
+                        r'prezzo\s+(.+)',
+                        # Pattern 5: "informazioni su X"
+                        r'(?:informazioni|dettagli|info)\s+(?:su|del|dello|della)\s+(.+)',
+                        # Pattern 6: "X in cantina/magazzino" (generico, solo se altri non matchano)
+                        r'(.+?)(?:\s+in\s+cantina|\s+in\s+magazzino|\s+quantità|$)',
                     ]
                     
                     wine_search_term = None
@@ -316,9 +324,11 @@ INVENTARIO ATTUALE:
                         match = re.search(pattern, prompt.lower())
                         if match:
                             wine_search_term = match.group(1).strip()
-                            # Rimuovi parole comuni
-                            wine_search_term = re.sub(r'\b(ho|hai|in|cantina|magazzino|quanti|quanto|vendo|prezzo|informazioni|dettagli|info|su|del|dello|della)\b', '', wine_search_term).strip()
-                            if wine_search_term:
+                            # Rimuovi parole comuni (incluso "bottiglie", "di", "bottiglia", ecc.)
+                            wine_search_term = re.sub(r'\b(ho|hai|in|cantina|magazzino|quanti|quante|quanto|vendo|vendi|prezzo|informazioni|dettagli|info|su|del|dello|della|bottiglie|bottiglia|di|mi|dici|dirmi)\b', '', wine_search_term, flags=re.IGNORECASE).strip()
+                            # Rimuovi spazi multipli
+                            wine_search_term = re.sub(r'\s+', ' ', wine_search_term).strip()
+                            if wine_search_term and len(wine_search_term) > 2:  # Almeno 3 caratteri
                                 logger.info(f"Rilevata ricerca vino specifico: '{wine_search_term}'")
                                 break
                     
