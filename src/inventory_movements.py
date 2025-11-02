@@ -40,14 +40,15 @@ class InventoryMovementManager:
             r'(\d+) bottiglie? di (.+) aggiunte?'
         ]
     
-    def process_movement_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    async def process_movement_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Processa un messaggio per riconoscere movimenti inventario"""
         user = update.effective_user
         telegram_id = user.id
         message_text = update.message.text.lower().strip()
         
         # Verifica se l'onboarding è completato
-        if not db_manager.get_user_by_telegram_id(telegram_id) or not db_manager.get_user_by_telegram_id(telegram_id).onboarding_completed:
+        user_db = db_manager.get_user_by_telegram_id(telegram_id)
+        if not user_db or not user_db.onboarding_completed:
             return False
         
         # Cerca pattern di consumo
@@ -56,7 +57,7 @@ class InventoryMovementManager:
             if match:
                 quantity = int(match.group(1))
                 wine_name = match.group(2).strip()
-                return self._process_consumo(update, context, telegram_id, wine_name, quantity)
+                return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
         
         # Cerca pattern di rifornimento
         for pattern in self.rifornimento_patterns:
@@ -64,112 +65,133 @@ class InventoryMovementManager:
             if match:
                 quantity = int(match.group(1))
                 wine_name = match.group(2).strip()
-                return self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
+                return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
         
         return False
     
-    def _process_consumo(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+    async def _process_consumo(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                         telegram_id: int, wine_name: str, quantity: int) -> bool:
-        """Processa un consumo (quantità negativa)"""
+        """Processa un consumo (quantità negativa) via processor"""
         try:
-            # Trova il vino nell'inventario
-            wines = db_manager.get_user_wines(telegram_id)
-            matching_wine = self._find_matching_wine(wines, wine_name)
+            from .processor_client import processor_client
             
-            if not matching_wine:
-                update.message.reply_text(
+            # Recupera business_name dal database
+            user = db_manager.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                await update.message.reply_text(
+                    "❌ **Errore**: Nome locale non trovato.\n"
+                    "Completa prima l'onboarding con `/start`."
+                )
+                return True
+            
+            business_name = user.business_name
+            
+            # Invia movimento al processor
+            result = await processor_client.process_movement(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                wine_name=wine_name,
+                movement_type='consumo',
+                quantity=quantity,
+                notes=f"Vendita/consumo di {quantity} bottiglie"
+            )
+            
+            if result.get('status') == 'success':
+                success_message = (
+                    f"✅ **Consumo registrato**\n\n"
+                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"🏭 **Produttore:** {result.get('wine_producer', 'N/A')}\n"
+                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                    f"📉 **Consumate:** {quantity} bottiglie\n\n"
+                    f"💾 **Log salvato** nel sistema"
+                )
+                await update.message.reply_text(success_message, parse_mode='Markdown')
+            elif result.get('error') == 'wine_not_found':
+                await update.message.reply_text(
                     f"❌ **Vino non trovato**\n\n"
                     f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
                     f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
                 )
-                return True
-            
-            # Verifica quantità disponibile
-            if matching_wine.quantity < quantity:
-                update.message.reply_text(
+            elif result.get('error') == 'insufficient_quantity':
+                await update.message.reply_text(
                     f"⚠️ **Quantità insufficiente**\n\n"
-                    f"**{matching_wine.name}** ({matching_wine.producer})\n"
-                    f"📦 Disponibili: {matching_wine.quantity} bottiglie\n"
+                    f"**{result.get('wine_name')}**\n"
+                    f"📦 Disponibili: {result.get('available_quantity')} bottiglie\n"
                     f"🍷 Richieste: {quantity} bottiglie\n\n"
                     f"💡 Verifica la quantità o aggiorna l'inventario."
                 )
-                return True
-            
-            # Aggiorna quantità e crea log
-            success = db_manager.update_wine_quantity_with_log(
-                telegram_id=telegram_id,
-                wine_name=matching_wine.name,
-                quantity_change=-quantity,  # Negativo per consumo
-                movement_type="consumo",
-                notes=f"Vendita/consumo di {quantity} bottiglie"
-            )
-            
-            if success:
-                new_quantity = matching_wine.quantity - quantity
-                success_message = (
-                    f"✅ **Consumo registrato**\n\n"
-                    f"🍷 **Vino:** {matching_wine.name}\n"
-                    f"🏭 **Produttore:** {matching_wine.producer}\n"
-                    f"📦 **Quantità:** {matching_wine.quantity} → {new_quantity} bottiglie\n"
-                    f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                    f"💾 **Log salvato** nel sistema"
-                )
-                update.message.reply_text(success_message, parse_mode='Markdown')
             else:
-                update.message.reply_text("❌ Errore durante l'aggiornamento. Riprova.")
+                error_msg = result.get('error', 'Errore sconosciuto')
+                await update.message.reply_text(
+                    f"❌ **Errore durante l'aggiornamento**\n\n"
+                    f"{error_msg}\n\n"
+                    f"Riprova più tardi."
+                )
             
             return True
             
         except Exception as e:
             logger.error(f"Errore processamento consumo: {e}")
-            update.message.reply_text("❌ Errore durante il processamento. Riprova.")
+            await update.message.reply_text("❌ Errore durante il processamento. Riprova.")
             return True
     
-    def _process_rifornimento(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+    async def _process_rifornimento(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
                              telegram_id: int, wine_name: str, quantity: int) -> bool:
-        """Processa un rifornimento (quantità positiva)"""
+        """Processa un rifornimento (quantità positiva) via processor"""
         try:
-            # Trova il vino nell'inventario
-            wines = db_manager.get_user_wines(telegram_id)
-            matching_wine = self._find_matching_wine(wines, wine_name)
+            from .processor_client import processor_client
             
-            if not matching_wine:
-                update.message.reply_text(
+            # Recupera business_name dal database
+            user = db_manager.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                await update.message.reply_text(
+                    "❌ **Errore**: Nome locale non trovato.\n"
+                    "Completa prima l'onboarding con `/start`."
+                )
+                return True
+            
+            business_name = user.business_name
+            
+            # Invia movimento al processor
+            result = await processor_client.process_movement(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                wine_name=wine_name,
+                movement_type='rifornimento',
+                quantity=quantity,
+                notes=f"Rifornimento di {quantity} bottiglie"
+            )
+            
+            if result.get('status') == 'success':
+                success_message = (
+                    f"✅ **Rifornimento registrato**\n\n"
+                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"🏭 **Produttore:** {result.get('wine_producer', 'N/A')}\n"
+                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                    f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
+                    f"💾 **Log salvato** nel sistema"
+                )
+                await update.message.reply_text(success_message, parse_mode='Markdown')
+            elif result.get('error') == 'wine_not_found':
+                await update.message.reply_text(
                     f"❌ **Vino non trovato**\n\n"
                     f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
                     f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
                     f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
                 )
-                return True
-            
-            # Aggiorna quantità e crea log
-            success = db_manager.update_wine_quantity_with_log(
-                telegram_id=telegram_id,
-                wine_name=matching_wine.name,
-                quantity_change=quantity,  # Positivo per rifornimento
-                movement_type="rifornimento",
-                notes=f"Rifornimento di {quantity} bottiglie"
-            )
-            
-            if success:
-                new_quantity = matching_wine.quantity + quantity
-                success_message = (
-                    f"✅ **Rifornimento registrato**\n\n"
-                    f"🍷 **Vino:** {matching_wine.name}\n"
-                    f"🏭 **Produttore:** {matching_wine.producer}\n"
-                    f"📦 **Quantità:** {matching_wine.quantity} → {new_quantity} bottiglie\n"
-                    f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                    f"💾 **Log salvato** nel sistema"
-                )
-                update.message.reply_text(success_message, parse_mode='Markdown')
             else:
-                update.message.reply_text("❌ Errore durante l'aggiornamento. Riprova.")
+                error_msg = result.get('error', 'Errore sconosciuto')
+                await update.message.reply_text(
+                    f"❌ **Errore durante l'aggiornamento**\n\n"
+                    f"{error_msg}\n\n"
+                    f"Riprova più tardi."
+                )
             
             return True
             
         except Exception as e:
             logger.error(f"Errore processamento rifornimento: {e}")
-            update.message.reply_text("❌ Errore durante il processamento. Riprova.")
+            await update.message.reply_text("❌ Errore durante il processamento. Riprova.")
             return True
     
     def _find_matching_wine(self, wines: List, wine_name: str) -> Optional[Any]:

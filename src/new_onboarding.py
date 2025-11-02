@@ -466,19 +466,34 @@ class NewOnboardingManager:
             
             if result.get('status') == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
-                warnings_count = result.get('warnings_count', 0)
+                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result.get('error_count', 0)      # Solo errori critici
                 
                 logger.info(f"✅ Inventario elaborato: {saved_wines} vini salvati")
-                if warnings_count > 0:
-                    logger.warning(f"⚠️ {warnings_count} vini salvati con warning/errori")
+                if warning_count > 0:
+                    logger.info(f"ℹ️ {warning_count} warnings (annate mancanti, dati opzionali)")
+                if error_count > 0:
+                    logger.error(f"❌ {error_count} errori critici")
                 
                 # Salva il risultato per il completamento
                 context.user_data['processed_wines'] = saved_wines
-                context.user_data['warnings_count'] = warnings_count
+                context.user_data['warning_count'] = warning_count
+                context.user_data['error_count'] = error_count
                 context.user_data['inventory_processed'] = True
                 
-                # Completa l'onboarding
-                await self._complete_onboarding_final(update, context, business_name)
+                # Completa l'onboarding (solo se non ci sono errori critici)
+                if error_count == 0:
+                    await self._complete_onboarding_final(update, context, business_name)
+                else:
+                    # Mostra errore critico
+                    await update.message.reply_text(
+                        f"⚠️ **Errore elaborazione inventario**\n\n"
+                        f"✅ **{saved_wines} vini** salvati\n"
+                        f"❌ **{error_count} errori critici** durante l'elaborazione\n"
+                        f"⚠️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n\n"
+                        f"📝 Verifica i dettagli nelle note dei vini.\n"
+                        f"Riprova o contatta il supporto se il problema persiste."
+                    )
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 logger.error(f"❌ Errore processor: {error_msg}")
@@ -519,7 +534,8 @@ class NewOnboardingManager:
             
             # Messaggio di completamento
             processed_wines = context.user_data.get('processed_wines', 0)
-            warnings_count = context.user_data.get('warnings_count', 0)
+            warning_count = context.user_data.get('warning_count', 0)  # Separato: solo warnings
+            error_count = context.user_data.get('error_count', 0)      # Solo errori critici
             
             message = (
                 f"🎉 **Onboarding completato con successo!**\n\n"
@@ -527,17 +543,23 @@ class NewOnboardingManager:
                 f"✅ **{processed_wines} vini** elaborati e salvati\n"
             )
             
-            if warnings_count > 0:
+            # Mostra warnings solo se presenti (non sono errori)
+            if warning_count > 0:
                 message += (
-                    f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
+                    f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
                     f"📝 I dettagli sono nelle note di ogni vino\n\n"
                 )
             
             message += (
                 f"✅ Inventario giorno 0 salvato\n"
                 f"✅ Sistema pronto per l'uso\n\n"
-                f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!\n"
-                f"📋 Usa /help per vedere tutti i comandi disponibili."
+                f"🚀 **INVENTARIO OPERATIVO!**\n\n"
+                f"💬 **Ora puoi:**\n"
+                f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
+                f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
+                f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
+                f"• Consultare inventario: `/inventario`\n\n"
+                f"📋 Usa `/help` per tutti i comandi disponibili!"
             )
             
             await update.message.reply_text(message, parse_mode='Markdown')

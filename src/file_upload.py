@@ -128,23 +128,45 @@ class FileUploadManager:
             if result.get('status') == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
                 total_wines = result.get('total_wines', 0)
-                warnings_count = result.get('warnings_count', 0)
+                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result.get('error_count', 0)      # Solo errori critici
                 
-                message = (
-                    f"🎉 **Elaborazione completata!**\n\n"
-                    f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
-                )
-                
-                if warnings_count > 0:
-                    message += (
-                        f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
-                        f"📝 I dettagli sono salvati nelle note di ogni vino\n"
-                        f"💡 Verifica i vini nel tuo inventario per i dettagli\n\n"
+                # Messaggio base
+                if error_count > 0:
+                    # Se ci sono errori critici, mostra messaggio di errore
+                    message = (
+                        f"⚠️ **Elaborazione completata con errori**\n\n"
+                        f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
+                        f"❌ **{error_count} errori critici** durante l'elaborazione\n"
                     )
+                    if warning_count > 0:
+                        message += f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                    message += (
+                        f"\n📝 Verifica i dettagli nelle note dei vini.\n"
+                        f"💡 Riprova o contatta il supporto se il problema persiste.\n\n"
+                    )
+                else:
+                    # Successo (con o senza warnings)
+                    message = (
+                        f"🎉 **Elaborazione completata!**\n\n"
+                        f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
+                    )
+                    
+                    if warning_count > 0:
+                        message += (
+                            f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                            f"📝 I dettagli sono salvati nelle note di ogni vino\n"
+                            f"💡 Verifica i vini nel tuo inventario per i dettagli\n\n"
+                        )
                 
                 message += (
                     f"🏢 **{business_name}** aggiornato con successo\n\n"
-                    f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
+                    f"🚀 **INVENTARIO OPERATIVO!**\n\n"
+                    f"💬 **Ora puoi:**\n"
+                    f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
+                    f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
+                    f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
+                    f"• Consultare inventario: `/inventario`"
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
@@ -256,22 +278,44 @@ class FileUploadManager:
             if result.get('status') == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
                 total_wines = result.get('total_wines', 0)
-                warnings_count = result.get('warnings_count', 0)
+                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result.get('error_count', 0)      # Solo errori critici
                 
-                message = (
-                    f"🎉 **Elaborazione OCR completata!**\n\n"
-                    f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
-                )
-                
-                if warnings_count > 0:
-                    message += (
-                        f"⚠️ **{warnings_count} vini** salvati con warning/errori\n"
-                        f"📝 I dettagli sono salvati nelle note di ogni vino\n\n"
+                # Messaggio base
+                if error_count > 0:
+                    # Se ci sono errori critici, mostra messaggio di errore
+                    message = (
+                        f"⚠️ **Elaborazione OCR completata con errori**\n\n"
+                        f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
+                        f"❌ **{error_count} errori critici** durante l'elaborazione\n"
                     )
+                    if warning_count > 0:
+                        message += f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                    message += (
+                        f"\n📝 Verifica i dettagli nelle note dei vini.\n"
+                        f"💡 Riprova o contatta il supporto se il problema persiste.\n\n"
+                    )
+                else:
+                    # Successo (con o senza warnings)
+                    message = (
+                        f"🎉 **Elaborazione OCR completata!**\n\n"
+                        f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
+                    )
+                    
+                    if warning_count > 0:
+                        message += (
+                            f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                            f"📝 I dettagli sono salvati nelle note di ogni vino\n\n"
+                        )
                 
                 message += (
                     f"🏢 **{business_name}** aggiornato con successo\n\n"
-                    f"💬 Ora puoi comunicare i movimenti inventario in modo naturale!"
+                    f"🚀 **INVENTARIO OPERATIVO!**\n\n"
+                    f"💬 **Ora puoi:**\n"
+                    f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
+                    f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
+                    f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
+                    f"• Consultare inventario: `/inventario`"
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')

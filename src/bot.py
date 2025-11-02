@@ -185,7 +185,7 @@ async def chat_handler(update, context):
             return
         
         # Gestisci movimenti inventario
-        if inventory_movement_manager.process_movement_message(update, context):
+        if await inventory_movement_manager.process_movement_message(update, context):
             return
         
         # Gestisci aggiunta vino se in corso

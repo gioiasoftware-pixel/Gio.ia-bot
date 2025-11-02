@@ -276,6 +276,50 @@ class ProcessorClient:
                 "success": False,
                 "message": str(e)
             }
+    
+    async def process_movement(self, telegram_id: int, business_name: str, 
+                               wine_name: str, movement_type: str, 
+                               quantity: int, notes: str = None) -> Dict[str, Any]:
+        """
+        Processa movimento inventario (consumo o rifornimento).
+        Aggiorna quantità vino e salva log nel processor.
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', business_name)
+                form.add_field('wine_name', wine_name)
+                form.add_field('movement_type', movement_type)  # 'consumo' o 'rifornimento'
+                form.add_field('quantity', str(quantity))
+                if notes:
+                    form.add_field('notes', notes)
+                
+                async with session.post(f"{self.base_url}/inventory-movement", data=form) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Movement processed: {telegram_id}/{business_name} - {movement_type} {quantity} {wine_name}")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Error processing movement HTTP {response.status}: {error_text}")
+                        try:
+                            error_json = await response.json()
+                            return {
+                                "status": "error",
+                                "error": error_json.get("detail", error_text[:200])
+                            }
+                        except:
+                            return {
+                                "status": "error",
+                                "error": f"HTTP {response.status}: {error_text[:200]}"
+                            }
+        except Exception as e:
+            logger.error(f"Error processing movement: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
 # Istanza globale del client
 processor_client = ProcessorClient()
