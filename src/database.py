@@ -204,12 +204,71 @@ class DatabaseManager:
             return True
     
     def get_user_wines(self, telegram_id: int) -> List[Wine]:
-        """Ottieni tutti i vini di un utente"""
+        """Ottieni tutti i vini di un utente dalle tabelle dinamiche"""
         with self.get_session() as session:
             user = session.query(User).filter(User.telegram_id == telegram_id).first()
-            if not user:
+            if not user or not user.business_name:
+                logger.warning(f"User {telegram_id} non trovato o business_name mancante")
                 return []
-            return session.query(Wine).filter(Wine.user_id == user.id).all()
+            
+            # Costruisci nome tabella dinamica
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                from sqlalchemy import text as sql_text
+                
+                # Query SQL raw per leggere dalla tabella dinamica
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    ORDER BY name
+                """)
+                
+                result = session.execute(query, {"user_id": user.id})
+                rows = result.fetchall()
+                
+                # Converti le righe in oggetti Wine
+                wines = []
+                for row in rows:
+                    # Crea un oggetto Wine-like (usando dict per compatibilità)
+                    wine_dict = {
+                        'id': row.id,
+                        'user_id': row.user_id,
+                        'name': row.name,
+                        'producer': row.producer,
+                        'vintage': row.vintage,
+                        'grape_variety': row.grape_variety,
+                        'region': row.region,
+                        'country': row.country,
+                        'wine_type': row.wine_type,
+                        'classification': row.classification,
+                        'quantity': row.quantity,
+                        'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                        'cost_price': row.cost_price,
+                        'selling_price': row.selling_price,
+                        'alcohol_content': row.alcohol_content,
+                        'description': row.description,
+                        'notes': row.notes,
+                        'created_at': row.created_at,
+                        'updated_at': row.updated_at
+                    }
+                    
+                    # Crea un oggetto Wine con i dati
+                    wine = Wine()
+                    for key, value in wine_dict.items():
+                        setattr(wine, key, value)
+                    wines.append(wine)
+                
+                logger.info(f"Recuperati {len(wines)} vini da tabella dinamica per {telegram_id}/{user.business_name}")
+                return wines
+                
+            except Exception as e:
+                logger.error(f"Errore leggendo inventario da tabella dinamica {table_name}: {e}")
+                # Fallback: prova vecchia tabella wines (per compatibilità)
+                try:
+                    return session.query(Wine).filter(Wine.user_id == user.id).all()
+                except:
+                    return []
     
     def add_wine(self, telegram_id: int, wine_data: Dict[str, Any]) -> Optional[Wine]:
         """Aggiungi un vino all'inventario"""
