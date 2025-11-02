@@ -272,8 +272,13 @@ class DatabaseManager:
     
     def search_wines(self, telegram_id: int, search_term: str, limit: int = 10) -> List[Wine]:
         """
-        Cerca vini nell'inventario per nome, produttore o regione (fuzzy search).
-        Cerca direttamente nel database invece che nel contesto.
+        Cerca vini nell'inventario con ricerca fuzzy avanzata su TUTTI i campi.
+        Supporta:
+        - Match esatti
+        - Match parziali (contiene)
+        - Ricerca per singole parole (se il termine contiene più parole)
+        - Case-insensitive
+        - Priorità ai match migliori
         """
         with self.get_session() as session:
             user = session.query(User).filter(User.telegram_id == telegram_id).first()
@@ -287,40 +292,67 @@ class DatabaseManager:
             try:
                 from sqlalchemy import text as sql_text
                 
-                # Query SQL raw con ricerca fuzzy (LIKE case-insensitive) su TUTTI i campi
-                search_pattern = f"%{search_term}%"
+                # Pulisci search_term
+                search_term_clean = search_term.strip().lower()
+                
+                # Dividi il termine in parole per ricerca fuzzy
+                search_words = [w.strip() for w in search_term_clean.split() if len(w.strip()) > 2]  # Ignora parole < 3 caratteri
+                
+                # Pattern principale (termine completo)
+                search_pattern = f"%{search_term_clean}%"
                 
                 # Prova anche a convertire search_term in numeri per ricerca prezzi/gradazione/annata
                 search_numeric = None
                 search_float = None
                 try:
                     # Prova intero (per vintage)
-                    search_numeric = int(search_term)
+                    search_numeric = int(search_term_clean)
                 except ValueError:
                     try:
                         # Prova float (per prezzi o gradazione)
-                        search_float = float(search_term.replace(',', '.'))
+                        search_float = float(search_term_clean.replace(',', '.'))
                     except ValueError:
                         pass
                 
-                # Costruisci query con tutti i campi di ricerca
+                # Costruisci condizioni di ricerca fuzzy
+                # Cerca il termine completo in tutti i campi
                 query_conditions = [
-                    "LOWER(name) LIKE LOWER(:search_pattern)",
-                    "LOWER(producer) LIKE LOWER(:search_pattern)",
-                    "LOWER(region) LIKE LOWER(:search_pattern)",
-                    "LOWER(country) LIKE LOWER(:search_pattern)",
-                    "LOWER(wine_type) LIKE LOWER(:search_pattern)",
-                    "LOWER(classification) LIKE LOWER(:search_pattern)",
-                    "LOWER(grape_variety) LIKE LOWER(:search_pattern)"
+                    "name ILIKE :search_pattern",
+                    "producer ILIKE :search_pattern",
+                    "region ILIKE :search_pattern",
+                    "country ILIKE :search_pattern",
+                    "wine_type ILIKE :search_pattern",
+                    "classification ILIKE :search_pattern",
+                    "grape_variety ILIKE :search_pattern"
                 ]
                 
-                # Aggiungi condizioni numeriche se disponibili
+                # Se il termine contiene più parole, cerca anche singole parole (ricerca fuzzy avanzata)
+                if len(search_words) > 1:
+                    for word in search_words:
+                        word_pattern = f"%{word}%"
+                        query_conditions.extend([
+                            f"name ILIKE :word_{search_words.index(word)}",
+                            f"producer ILIKE :word_{search_words.index(word)}",
+                            f"region ILIKE :word_{search_words.index(word)}",
+                            f"country ILIKE :word_{search_words.index(word)}",
+                            f"wine_type ILIKE :word_{search_words.index(word)}",
+                            f"classification ILIKE :word_{search_words.index(word)}",
+                            f"grape_variety ILIKE :word_{search_words.index(word)}"
+                        ])
+                
+                # Parametri query
                 query_params = {
                     "user_id": user.id,
                     "search_pattern": search_pattern,
                     "limit": limit
                 }
                 
+                # Aggiungi parametri per match singole parole
+                if len(search_words) > 1:
+                    for i, word in enumerate(search_words):
+                        query_params[f"word_{i}"] = f"%{word}%"
+                
+                # Aggiungi condizioni numeriche se disponibili
                 if search_numeric is not None:
                     query_conditions.append("vintage = :search_numeric")
                     query_params["search_numeric"] = search_numeric
@@ -330,11 +362,18 @@ class DatabaseManager:
                     query_conditions.append("(ABS(alcohol_content - :search_float) < 0.1)")
                     query_params["search_float"] = search_float
                 
+                # Query con priorità ai match nel nome (più rilevante)
                 query = sql_text(f"""
-                    SELECT * FROM {table_name} 
+                    SELECT *, 
+                        CASE 
+                            WHEN name ILIKE :search_pattern THEN 1
+                            WHEN producer ILIKE :search_pattern THEN 2
+                            ELSE 3
+                        END as match_priority
+                    FROM {table_name} 
                     WHERE user_id = :user_id
                     AND ({' OR '.join(query_conditions)})
-                    ORDER BY name
+                    ORDER BY match_priority ASC, name ASC
                     LIMIT :limit
                 """)
                 
