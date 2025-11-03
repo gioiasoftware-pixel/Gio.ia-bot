@@ -148,6 +148,15 @@ def format_wine_info(wine: Any) -> str:
     
     lines.append("━" * 30)
 
+    # Helper per determinare se un campo è vuoto o placeholder
+    def is_empty_or_placeholder(value):
+        if value is None:
+            return True
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            return not value_lower or value_lower in ['sconosciuto', 'sconosciuta', 'non specificato', 'n/a', 'na', '']
+        return False
+    
     # Calcola campi mancanti e campi modificabili (esistenti)
     missing_fields = []
     editable_fields = []  # Campi esistenti che possono essere modificati
@@ -157,54 +166,31 @@ def format_wine_info(wine: Any) -> str:
                           'selling_price', 'cost_price', 'alcohol_content', 'description', 'notes']
     
     for field in all_editable_fields:
-        if field == 'producer' and not wine.producer:
+        value = getattr(wine, field, None)
+        is_empty = is_empty_or_placeholder(value)
+        
+        if is_empty:
             missing_fields.append(field)
-        elif field == 'producer' and wine.producer:
-            editable_fields.append(field)
-        elif field == 'vintage' and not wine.vintage:
-            missing_fields.append(field)
-        elif field == 'vintage' and wine.vintage:
-            editable_fields.append(field)
-        elif field == 'grape_variety' and not getattr(wine, 'grape_variety', None):
-            missing_fields.append(field)
-        elif field == 'grape_variety' and getattr(wine, 'grape_variety', None):
-            editable_fields.append(field)
-        elif field == 'classification' and not getattr(wine, 'classification', None):
-            missing_fields.append(field)
-        elif field == 'classification' and getattr(wine, 'classification', None):
-            editable_fields.append(field)
-        elif field == 'selling_price' and getattr(wine, 'selling_price', None) is None:
-            missing_fields.append(field)
-        elif field == 'selling_price' and getattr(wine, 'selling_price', None) is not None:
-            editable_fields.append(field)
-        elif field == 'cost_price' and getattr(wine, 'cost_price', None) is None:
-            missing_fields.append(field)
-        elif field == 'cost_price' and getattr(wine, 'cost_price', None) is not None:
-            editable_fields.append(field)
-        elif field == 'alcohol_content' and getattr(wine, 'alcohol_content', None) is None:
-            missing_fields.append(field)
-        elif field == 'alcohol_content' and getattr(wine, 'alcohol_content', None) is not None:
-            editable_fields.append(field)
-        elif field == 'description' and not getattr(wine, 'description', None):
-            missing_fields.append(field)
-        elif field == 'description' and getattr(wine, 'description', None):
-            editable_fields.append(field)
-        elif field == 'notes' and not getattr(wine, 'notes', None):
-            missing_fields.append(field)
-        elif field == 'notes' and getattr(wine, 'notes', None):
+        else:
             editable_fields.append(field)
 
     text = "\n".join(lines)
-    if getattr(wine, 'id', None) is not None:
+    wine_id = getattr(wine, 'id', None)
+    if wine_id is not None:
         # Aggiungi marker nascosto per il bot con tutti i campi (mancanti + modificabili)
-        all_fields = missing_fields + editable_fields
-        if all_fields:
-            # Due marker: uno per mancanti, uno per modificabili
-            markers = []
-            if missing_fields:
-                markers.append(f"[[FILL_FIELDS:{wine.id}:{','.join(missing_fields)}]]")
-            if editable_fields:
-                markers.append(f"[[EDIT_FIELDS:{wine.id}:{','.join(editable_fields)}]]")
+        # SEMPRE genera i marker se ci sono campi (anche se tutti modificabili o tutti mancanti)
+        markers = []
+        if missing_fields:
+            markers.append(f"[[FILL_FIELDS:{wine_id}:{','.join(missing_fields)}]]")
+        if editable_fields:
+            markers.append(f"[[EDIT_FIELDS:{wine_id}:{','.join(editable_fields)}]]")
+        
+        # Se non ci sono né campi mancanti né modificabili, aggiungi comunque tutti i campi come modificabili
+        # (fallback per garantire che i bottoni siano sempre disponibili)
+        if not markers and all_editable_fields:
+            markers.append(f"[[EDIT_FIELDS:{wine_id}:{','.join(all_editable_fields[:6])}]]")
+        
+        if markers:
             text += "\n\n" + " ".join(markers)
     return text
 
