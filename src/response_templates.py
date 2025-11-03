@@ -102,6 +102,9 @@ def format_wine_info(wine: Any) -> str:
     if wine.producer:
         lines.append(f"🏭 **Produttore:** {wine.producer}")
     
+    if hasattr(wine, 'supplier') and wine.supplier:
+        lines.append(f"🏪 **Fornitore:** {wine.supplier}")
+    
     if wine.region:
         location = wine.region
         if wine.country:
@@ -162,7 +165,7 @@ def format_wine_info(wine: Any) -> str:
     editable_fields = []  # Campi esistenti che possono essere modificati
     
     # Lista completa campi modificabili
-    all_editable_fields = ['producer', 'vintage', 'grape_variety', 'classification', 
+    all_editable_fields = ['producer', 'supplier', 'vintage', 'grape_variety', 'classification', 
                           'selling_price', 'cost_price', 'alcohol_content', 'description', 'notes']
     
     for field in all_editable_fields:
