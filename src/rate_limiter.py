@@ -36,54 +36,60 @@ async def check_rate_limit(
         window_start = now - window_seconds
         
         try:
-            # Conta richieste ultima finestra
-            query = sql_text("""
-                SELECT COUNT(*) 
-                FROM rate_limit_logs
-                WHERE key = :key 
-                AND created_at >= to_timestamp(:window_start)
+            # Nuovo schema: tabella rate_limits (telegram_id, action, timestamp)
+            count_query = sql_text("""
+                SELECT COUNT(*)
+                FROM rate_limits
+                WHERE telegram_id = :telegram_id
+                  AND action = :action
+                  AND timestamp >= to_timestamp(:window_start)
             """)
-            result = await session.execute(query, {
-                "key": key,
-                "window_start": window_start
+            result = await session.execute(count_query, {
+                "telegram_id": telegram_id,
+                "action": action,
+                "window_start": window_seconds and window_start or 0
             })
             count = result.scalar_one()
-            
+
             if count >= max_requests:
-                # Calcola retry_after (quando scade finestra più vecchia)
+                # Calcola retry_after basandosi sul record più vecchio nella finestra
                 oldest_query = sql_text("""
-                    SELECT MIN(created_at) 
-                    FROM rate_limit_logs
-                    WHERE key = :key
-                    AND created_at >= to_timestamp(:window_start)
+                    SELECT MIN(timestamp)
+                    FROM rate_limits
+                    WHERE telegram_id = :telegram_id
+                      AND action = :action
+                      AND timestamp >= to_timestamp(:window_start)
                 """)
                 oldest_result = await session.execute(oldest_query, {
-                    "key": key,
-                    "window_start": window_start
+                    "telegram_id": telegram_id,
+                    "action": action,
+                    "window_start": window_seconds and window_start or 0
                 })
                 oldest_timestamp = oldest_result.scalar_one()
-                
+
                 if oldest_timestamp:
                     retry_after = int((oldest_timestamp.timestamp() + window_seconds) - now)
-                    retry_after = max(1, retry_after)  # Min 1 secondo
+                    retry_after = max(1, retry_after)
                 else:
                     retry_after = window_seconds
-                
                 return (False, retry_after)
-            
-            # Registra richiesta (inserisci o ignora se tabella non esiste)
+
+            # Registra nuova richiesta
             try:
                 insert_query = sql_text("""
-                    INSERT INTO rate_limit_logs (key, created_at)
-                    VALUES (:key, to_timestamp(:now))
+                    INSERT INTO rate_limits (telegram_id, action, timestamp)
+                    VALUES (:telegram_id, :action, to_timestamp(:now))
                 """)
-                await session.execute(insert_query, {"key": key, "now": now})
+                await session.execute(insert_query, {
+                    "telegram_id": telegram_id,
+                    "action": action,
+                    "now": now
+                })
                 await session.commit()
             except Exception as e:
-                # Tabella non esiste o errore - log ma non bloccare
-                logger.warning(f"Error inserting rate limit log (table may not exist): {e}")
+                logger.warning(f"Error inserting rate limit record: {e}")
                 await session.rollback()
-            
+
             return (True, None)
             
         except Exception as e:
