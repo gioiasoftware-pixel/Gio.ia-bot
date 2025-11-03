@@ -8,7 +8,8 @@ from .database_async import async_db_manager
 from .response_templates import (
     format_inventory_list, format_wine_quantity, format_wine_price,
     format_wine_info, format_wine_not_found, format_wine_exists,
-    format_low_stock_alert, format_inventory_summary, format_movement_period_summary
+    format_low_stock_alert, format_inventory_summary, format_movement_period_summary,
+    format_search_no_results
 )
 from .database_async import get_movement_summary
 
@@ -66,6 +67,43 @@ async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> s
         logger.error(f"Errore creazione lista inventario: {e}")
         return "⚠️ Errore nel recupero dell'inventario. Riprova con /inventario."
 
+
+def _parse_filters(prompt: str) -> dict:
+    """Estrae filtri semplici dal linguaggio naturale (regioni, tipo, prezzo, annata, produttore)."""
+    p = prompt.lower()
+    filters = {}
+    regions = [
+        'toscana','piemonte','veneto','sicilia','sardegna','lombardia','marche','umbria','lazio',
+        'puglia','abruzzo','friuli','trentino','alto adige','campania','liguria','emilia','romagna'
+    ]
+    for r in regions:
+        if r in p:
+            filters['region'] = 'Alto Adige' if r == 'alto adige' else r.capitalize()
+            break
+    if re.search(r'\brossi?\b', p):
+        filters['wine_type'] = 'rosso'
+    if re.search(r'\bbianc[oi]\b', p):
+        filters['wine_type'] = 'bianco'
+    if 'spumante' in p:
+        filters['wine_type'] = 'spumante'
+    if 'rosato' in p:
+        filters['wine_type'] = 'rosato'
+    m = re.search(r'prezzo\s*(sotto|inferiore|<)\s*€?\s*(\d+[\.,]?\d*)', p)
+    if m:
+        filters['price_max'] = float(m.group(2).replace(',', '.'))
+    m = re.search(r'prezzo\s*(sopra|maggiore|>)\s*€?\s*(\d+[\.,]?\d*)', p)
+    if m:
+        filters['price_min'] = float(m.group(2).replace(',', '.'))
+    m = re.search(r'(?:dal|da)\s*((?:19|20)\d{2})', p)
+    if m:
+        filters['vintage_min'] = int(m.group(1))
+    m = re.search(r'(?:fino\s*al|al)\s*((?:19|20)\d{2})', p)
+    if m:
+        filters['vintage_max'] = int(m.group(1))
+    m = re.search(r"produttore\s+([\w\s'’]+)", p)
+    if m:
+        filters['producer'] = m.group(1).strip()
+    return filters
 
 async def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
     """
@@ -703,6 +741,32 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 }
             }
         ]
+        # Ricerca filtrata e riepilogo inventario
+        tools.extend([
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_wines",
+                    "description": "Cerca vini applicando filtri multipli (region, wine_type, price/vintage range, producer, name_contains).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filters": {"type": "object"},
+                            "limit": {"type": "integer", "default": 50}
+                        },
+                        "required": ["filters"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_inventory_stats",
+                    "description": "Ritorna il riepilogo inventario (totale vini, totale bottiglie, prezzi media/min/max, low stock).",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            }
+        ])
         tools.append({
             "type": "function",
             "function": {
@@ -796,6 +860,28 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 if wines:
                     return format_wine_quantity(wines[0])
                 return format_wine_not_found(query)
+
+            if name == "search_wines":
+                from .database_async import async_db_manager
+                filters = args.get("filters") or {}
+                limit = int(args.get("limit", 50))
+                # Fallback: arricchisci filtri dal prompt
+                derived = _parse_filters(prompt)
+                filters = {**derived, **filters}
+                wines = await async_db_manager.search_wines_filtered(telegram_id, filters, limit=limit)
+                if wines:
+                    return format_inventory_list(wines, limit=limit)
+                return format_search_no_results(filters)
+
+            if name == "get_inventory_stats":
+                from .database_async import async_db_manager
+                stats = await async_db_manager.get_inventory_stats(telegram_id)
+                return format_inventory_summary(
+                    telegram_id,
+                    stats.get('total_wines', 0),
+                    stats.get('total_bottles', 0),
+                    stats.get('low_stock', 0)
+                )
 
             if name == "get_movement_summary":
                 period = (args.get("period") or "").strip()

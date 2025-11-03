@@ -305,6 +305,44 @@ def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
     lines.append("━" * 30)
     return "\n".join(lines)
 
+
+def format_search_no_results(filters: Dict[str, Any]) -> str:
+    """
+    Template quando una ricerca filtrata non trova risultati.
+    Mostra i filtri applicati in forma leggibile e suggerimenti per affinare.
+    """
+    def _fmt(k, v):
+        if v is None or v == "":
+            return None
+        return f"{k}: {v}"
+
+    applied = []
+    for key in [
+        'region','country','producer','wine_type','classification','name_contains',
+        'vintage_min','vintage_max','price_min','price_max','quantity_min','quantity_max'
+    ]:
+        val = filters.get(key)
+        if val is not None and val != "":
+            applied.append(_fmt(key, val))
+
+    lines = [
+        "🔎 **Nessun risultato per la ricerca**",
+        "━" * 30,
+    ]
+
+    if applied:
+        lines.append("Filtri applicati:")
+        for a in applied:
+            if a:
+                lines.append(f"• {a}")
+
+    lines.append("\n💡 Suggerimenti:")
+    lines.append("• Allarga i filtri (es. rimuovi annata o riduci vincoli di prezzo)")
+    lines.append("• Controlla l'ortografia di regione/produttore/nome")
+    lines.append("• Prova una ricerca per parola chiave")
+    lines.append("━" * 30)
+    return "\n".join(lines)
+
 def format_movement_confirmation(wine_name: str, movement_type: str, quantity: int, 
                                    quantity_before: int, quantity_after: int) -> str:
     """

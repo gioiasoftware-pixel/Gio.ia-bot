@@ -583,6 +583,113 @@ class AsyncDatabaseManager:
             user = await self.get_user_by_telegram_id(telegram_id)
             if not user or not user.business_name:
                 return []
+
+    async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
+        """
+        Ricerca con filtri multipli. Filtri supportati: region, country, producer, wine_type, classification,
+        name_contains, vintage_min, vintage_max, price_min, price_max, quantity_min, quantity_max.
+        """
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            clauses = ["user_id = :user_id"]
+            params = {"user_id": user.id, "limit": limit, "offset": offset}
+
+            def add_ilike(field, value):
+                if value:
+                    clauses.append(f"{field} ILIKE :{field}")
+                    params[field] = f"%{value}%"
+
+            add_ilike("region", filters.get("region"))
+            add_ilike("country", filters.get("country"))
+            add_ilike("producer", filters.get("producer"))
+            add_ilike("wine_type", filters.get("wine_type"))
+            add_ilike("classification", filters.get("classification"))
+            if filters.get("name_contains"):
+                clauses.append("name ILIKE :name_contains")
+                params["name_contains"] = f"%{filters['name_contains']}%"
+
+            # Range numerici
+            if filters.get("vintage_min") is not None:
+                clauses.append("vintage >= :vintage_min")
+                params["vintage_min"] = int(filters["vintage_min"])
+            if filters.get("vintage_max") is not None:
+                clauses.append("vintage <= :vintage_max")
+                params["vintage_max"] = int(filters["vintage_max"])
+            if filters.get("price_min") is not None:
+                clauses.append("selling_price >= :price_min")
+                params["price_min"] = float(filters["price_min"])
+            if filters.get("price_max") is not None:
+                clauses.append("selling_price <= :price_max")
+                params["price_max"] = float(filters["price_max"])
+            if filters.get("quantity_min") is not None:
+                clauses.append("quantity >= :quantity_min")
+                params["quantity_min"] = int(filters["quantity_min"])
+            if filters.get("quantity_max") is not None:
+                clauses.append("quantity <= :quantity_max")
+                params["quantity_max"] = int(filters["quantity_max"])
+
+            where_sql = " AND ".join(clauses)
+            query = sql_text(f"""
+                SELECT * FROM {table_name}
+                WHERE {where_sql}
+                ORDER BY name ASC
+                LIMIT :limit OFFSET :offset
+            """)
+            try:
+                result = await session.execute(query, params)
+                rows = result.fetchall()
+                wines = []
+                for row in rows:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    wines.append(wine)
+                return wines
+            except Exception as e:
+                logger.error(f"Errore search_wines_filtered su {table_name}: {e}")
+                return []
+
+    async def get_inventory_stats(self, telegram_id: int) -> Dict[str, Any]:
+        """
+        Statistiche inventario: totale vini, totale bottiglie, min/max/avg prezzo, low stock.
+        """
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return {"total_wines": 0, "total_bottles": 0, "avg_price": None, "min_price": None, "max_price": None, "low_stock": 0}
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            try:
+                stats_q = sql_text(f"""
+                    SELECT 
+                      COUNT(*) AS total_wines,
+                      COALESCE(SUM(COALESCE(quantity,0)),0) AS total_bottles,
+                      AVG(selling_price) AS avg_price,
+                      MIN(selling_price) AS min_price,
+                      MAX(selling_price) AS max_price,
+                      SUM(CASE WHEN COALESCE(quantity,0) <= COALESCE(min_quantity,0) THEN 1 ELSE 0 END) AS low_stock
+                    FROM {table_name}
+                    WHERE user_id = :user_id
+                """)
+                res = await session.execute(stats_q, {"user_id": user.id})
+                row = res.fetchone()
+                return {
+                    "total_wines": int(row.total_wines) if row and hasattr(row,'total_wines') else 0,
+                    "total_bottles": int(row.total_bottles) if row and hasattr(row,'total_bottles') else 0,
+                    "avg_price": float(row.avg_price) if row and getattr(row,'avg_price', None) is not None else None,
+                    "min_price": float(row.min_price) if row and getattr(row,'min_price', None) is not None else None,
+                    "max_price": float(row.max_price) if row and getattr(row,'max_price', None) is not None else None,
+                    "low_stock": int(row.low_stock) if row and hasattr(row,'low_stock') else 0,
+                }
+            except Exception as e:
+                logger.error(f"Errore get_inventory_stats su {table_name}: {e}")
+                return {"total_wines": 0, "total_bottles": 0, "avg_price": None, "min_price": None, "max_price": None, "low_stock": 0}
             
             table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
             
