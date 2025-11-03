@@ -473,7 +473,7 @@ class AsyncDatabaseManager:
                 query = sql_text(f"""
                     SELECT * FROM {table_name} 
                     WHERE user_id = :user_id
-                    ORDER BY data DESC
+                    ORDER BY movement_date DESC
                     LIMIT :limit
                 """)
                 
@@ -485,26 +485,17 @@ class AsyncDatabaseManager:
                 
                 logs = []
                 for row in rows:
-                    # Converte nuova struttura (data, Prodotto, prodotto_rifornito, prodotto_consumato)
-                    # alla vecchia struttura compatibile (movement_date, wine_name, movement_type, quantity_change)
-                    prodotto_rifornito = getattr(row, 'prodotto_rifornito', None) or 0
-                    prodotto_consumato = getattr(row, 'prodotto_consumato', None) or 0
-                    
-                    if prodotto_consumato > 0:
-                        movement_type = 'consumo'
-                        quantity_change = -prodotto_consumato
-                    elif prodotto_rifornito > 0:
-                        movement_type = 'rifornimento'
-                        quantity_change = prodotto_rifornito
-                    else:
-                        continue  # Skip se entrambi null
-                    
+                    # Usa nuovo schema: wine_name, movement_type, quantity_change, movement_date
                     log_dict = {
                         'id': getattr(row, 'id', None),
-                        'wine_name': getattr(row, 'Prodotto', None) or getattr(row, 'prodotto', None),
-                        'movement_type': movement_type,
-                        'quantity_change': quantity_change,
-                        'movement_date': getattr(row, 'data', None) or getattr(row, 'created_at', None)
+                        'wine_name': getattr(row, 'wine_name', None),
+                        'wine_producer': getattr(row, 'wine_producer', None),
+                        'movement_type': getattr(row, 'movement_type', None),
+                        'quantity_change': getattr(row, 'quantity_change', 0),
+                        'quantity_before': getattr(row, 'quantity_before', 0),
+                        'quantity_after': getattr(row, 'quantity_after', 0),
+                        'movement_date': getattr(row, 'movement_date', None),
+                        'notes': getattr(row, 'notes', None)
                     }
                     logs.append(log_dict)
                 
@@ -752,10 +743,10 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
         try:
             totals_q = sql_text(f"""
                 SELECT 
-                  COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) AS total_consumed,
-                  COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) AS total_replenished
+                  COALESCE(SUM(CASE WHEN movement_type = 'consumo' THEN ABS(quantity_change) ELSE 0 END), 0) AS total_consumed,
+                  COALESCE(SUM(CASE WHEN movement_type = 'rifornimento' THEN quantity_change ELSE 0 END), 0) AS total_replenished
                 FROM {table_name}
-                WHERE user_id = :user_id AND data >= :cutoff
+                WHERE user_id = :user_id AND movement_date >= :cutoff
             """)
             res = await session.execute(totals_q, {"user_id": user.id, "cutoff": cutoff})
             row = res.fetchone()
@@ -763,11 +754,11 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             total_replenished = int(row.total_replenished) if row and hasattr(row, 'total_replenished') else 0
 
             top_c_q = sql_text(f"""
-                SELECT Prodotto AS name, COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) AS qty
+                SELECT wine_name AS name, COALESCE(SUM(ABS(quantity_change)), 0) AS qty
                 FROM {table_name}
-                WHERE user_id = :user_id AND data >= :cutoff
-                GROUP BY Prodotto
-                HAVING COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) > 0
+                WHERE user_id = :user_id AND movement_date >= :cutoff AND movement_type = 'consumo'
+                GROUP BY wine_name
+                HAVING COALESCE(SUM(ABS(quantity_change)), 0) > 0
                 ORDER BY qty DESC
                 LIMIT 5
             """)
@@ -775,11 +766,11 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             top_consumed = [(r.name, int(r.qty)) for r in res_c.fetchall()]
 
             top_r_q = sql_text(f"""
-                SELECT Prodotto AS name, COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) AS qty
+                SELECT wine_name AS name, COALESCE(SUM(quantity_change), 0) AS qty
                 FROM {table_name}
-                WHERE user_id = :user_id AND data >= :cutoff
-                GROUP BY Prodotto
-                HAVING COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) > 0
+                WHERE user_id = :user_id AND movement_date >= :cutoff AND movement_type = 'rifornimento'
+                GROUP BY wine_name
+                HAVING COALESCE(SUM(quantity_change), 0) > 0
                 ORDER BY qty DESC
                 LIMIT 5
             """)
