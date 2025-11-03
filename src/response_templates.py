@@ -265,6 +265,46 @@ def format_inventory_summary(telegram_id: int, total_wines: int, total_quantity:
     )
 
 
+def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
+    """
+    Template per riepilogo movimenti per periodo (day/week/month).
+    totals atteso: {
+      'total_consumed': int,
+      'total_replenished': int,
+      'net_change': int,
+      'top_consumed': List[Tuple[name, qty]] opzionale,
+      'top_replenished': List[Tuple[name, qty]] opzionale
+    }
+    """
+    period_label = {
+        'day': 'Ultimo giorno',
+        'week': 'Ultimi 7 giorni',
+        'month': 'Ultimi 30 giorni'
+    }.get(period, period)
+
+    lines = [
+        f"📈 **Movimenti — {period_label}**",
+        "━" * 30,
+        f"📉 Consumate: {totals.get('total_consumed', 0)} bottiglie",
+        f"📈 Aggiunte: {totals.get('total_replenished', 0)} bottiglie",
+        f"📦 Variazione netta: {totals.get('net_change', 0)} bottiglie",
+    ]
+
+    top_c = totals.get('top_consumed') or []
+    if top_c:
+        lines.append("\n🔥 Più consumati:")
+        for name, qty in top_c[:5]:
+            lines.append(f"• {name} (−{qty})")
+
+    top_r = totals.get('top_replenished') or []
+    if top_r:
+        lines.append("\n🛒 Più riforniti:")
+        for name, qty in top_r[:5]:
+            lines.append(f"• {name} (+{qty})")
+
+    lines.append("━" * 30)
+    return "\n".join(lines)
+
 def format_movement_confirmation(wine_name: str, movement_type: str, quantity: int, 
                                    quantity_before: int, quantity_after: int) -> str:
     """

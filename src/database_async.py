@@ -617,3 +617,76 @@ class AsyncDatabaseManager:
 # Istanza globale
 async_db_manager = AsyncDatabaseManager()
 
+
+# Utility per cutoff periodo
+async def _compute_cutoff(period: str):
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    if period == 'week':
+        return now - timedelta(days=7)
+    if period == 'month':
+        return now - timedelta(days=30)
+    return now - timedelta(days=1)
+
+
+async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[str, Any]:
+    """
+    Riepiloga movimenti (consumi/rifornimenti) per periodo: day/week/month.
+    Ritorna dizionario con totali e top prodotti.
+    """
+    async with await get_async_session() as session:
+        # Carica utente
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.business_name:
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+        table_name = f'"{telegram_id}/{user.business_name} Consumi e rifornimenti"'
+        cutoff = await _compute_cutoff(period)
+        try:
+            totals_q = sql_text(f"""
+                SELECT 
+                  COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) AS total_consumed,
+                  COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) AS total_replenished
+                FROM {table_name}
+                WHERE user_id = :user_id AND data >= :cutoff
+            """)
+            res = await session.execute(totals_q, {"user_id": user.id, "cutoff": cutoff})
+            row = res.fetchone()
+            total_consumed = int(row.total_consumed) if row and hasattr(row, 'total_consumed') else 0
+            total_replenished = int(row.total_replenished) if row and hasattr(row, 'total_replenished') else 0
+
+            top_c_q = sql_text(f"""
+                SELECT Prodotto AS name, COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) AS qty
+                FROM {table_name}
+                WHERE user_id = :user_id AND data >= :cutoff
+                GROUP BY Prodotto
+                HAVING COALESCE(SUM(COALESCE(prodotto_consumato,0)),0) > 0
+                ORDER BY qty DESC
+                LIMIT 5
+            """)
+            res_c = await session.execute(top_c_q, {"user_id": user.id, "cutoff": cutoff})
+            top_consumed = [(r.name, int(r.qty)) for r in res_c.fetchall()]
+
+            top_r_q = sql_text(f"""
+                SELECT Prodotto AS name, COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) AS qty
+                FROM {table_name}
+                WHERE user_id = :user_id AND data >= :cutoff
+                GROUP BY Prodotto
+                HAVING COALESCE(SUM(COALESCE(prodotto_rifornito,0)),0) > 0
+                ORDER BY qty DESC
+                LIMIT 5
+            """)
+            res_r = await session.execute(top_r_q, {"user_id": user.id, "cutoff": cutoff})
+            top_replenished = [(r.name, int(r.qty)) for r in res_r.fetchall()]
+
+            return {
+                "total_consumed": total_consumed,
+                "total_replenished": total_replenished,
+                "net_change": int(total_replenished - total_consumed),
+                "top_consumed": top_consumed,
+                "top_replenished": top_replenished,
+            }
+        except Exception as e:
+            logger.error(f"Errore riepilogo movimenti da tabella {table_name}: {e}")
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+

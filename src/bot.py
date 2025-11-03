@@ -304,6 +304,20 @@ async def chat_handler(update, context):
                 logger.info(f"Movimento processato e risposta inviata a {username}")
                 return
         
+        # Richiesta periodo movimenti (AI marker)
+        if reply and '[[ASK_MOVES_PERIOD]]' in reply:
+            try:
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗓️ Ultimo giorno", callback_data="movsum:day")],
+                    [InlineKeyboardButton("📅 Ultima settimana", callback_data="movsum:week")],
+                    [InlineKeyboardButton("🗓️ Ultimo mese", callback_data="movsum:month")],
+                ])
+                await update.message.reply_text("Per quale periodo vuoi vedere i movimenti?", reply_markup=keyboard)
+                return
+            except Exception as e:
+                logger.error(f"Errore invio bottoni periodo: {e}")
+                # fallback: continua
+
         # Risposta normale AI con eventuali bottoni per compilare/modificare campi
         if reply and ("[[FILL_FIELDS:" in reply or "[[EDIT_FIELDS:" in reply):
             try:
@@ -667,6 +681,21 @@ async def callback_handler(update, context):
             return
         except Exception as e:
             logger.error(f"Errore back_main callback: {e}")
+    
+    # Riepilogo movimenti per periodo
+    if query.data and query.data.startswith("movsum:"):
+        try:
+            period = query.data.split(":", 1)[1]
+            telegram_id = update.effective_user.id
+            from .database_async import get_movement_summary
+            from .response_templates import format_movement_period_summary
+            summary = await get_movement_summary(telegram_id, period)
+            text = format_movement_period_summary(period, summary)
+            await query.edit_message_text(text, parse_mode='Markdown')
+            return
+        except Exception as e:
+            logger.error(f"Errore riepilogo movimenti: {e}")
+            await query.edit_message_text("⚠️ Errore nel calcolo dei movimenti. Riprova.")
     
     # Gestisci callback di compilazione campi vino
     if query.data and query.data.startswith("fill:"):

@@ -39,6 +39,20 @@ def _is_inventory_list_request(prompt: str) -> bool:
     return any(re.search(pt, p) for pt in patterns)
 
 
+def _is_movement_summary_request(prompt: str) -> bool:
+    """Riconosce richieste tipo: ultimi consumi/movimenti/ricavi"""
+    p = prompt.lower().strip()
+    patterns = [
+        r"\bultimi\s+consumi\b",
+        r"\bultimi\s+movimenti\b",
+        r"\bconsumi\s+recenti\b",
+        r"\bmovimenti\s+recenti\b",
+        r"\bmi\s+dici\s+i\s+miei\s+ultimi\s+consumi\b",
+        r"\briepilogo\s+(consumi|movimenti)\b",
+    ]
+    return any(re.search(pt, p) for pt in patterns)
+
+
 async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> str:
     """Recupera l'inventario utente e lo formatta usando template pre-strutturato."""
     try:
@@ -392,6 +406,10 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
         # Richieste esplicite di elenco inventario: rispondi direttamente interrogando il DB
         if _is_inventory_list_request(prompt):
             return await _build_inventory_list_response(telegram_id, limit=50)
+
+        # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker)
+        if _is_movement_summary_request(prompt):
+            return "[[ASK_MOVES_PERIOD]]"
 
         movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
