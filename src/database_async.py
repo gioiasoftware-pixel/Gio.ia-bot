@@ -232,8 +232,25 @@ class AsyncDatabaseManager:
             
             try:
                 search_term_clean = search_term.strip().lower()
+                # Versione senza accenti/apostrofi per match più robusto (es. saten -> Satèn)
+                accent_from = "àáâäèéêëìíîïòóôöùúûüÀÁÂÄÈÉÊËÌÍÎÏÒÓÔÖÙÚÛÜ’ʼ'`´"
+                accent_to   = "aaaaeeeeiiiioooouuuuAAAAEEEEIIIIOOOOUUUU"  # char extra in 'from' verranno rimossi
+                # Costruisci pattern unaccented lato Python per coerenza
+                def strip_accents(s: str) -> str:
+                    trans = str.maketrans({
+                        'à':'a','á':'a','â':'a','ä':'a','è':'e','é':'e','ê':'e','ë':'e',
+                        'ì':'i','í':'i','î':'i','ï':'i','ò':'o','ó':'o','ô':'o','ö':'o',
+                        'ù':'u','ú':'u','û':'u','ü':'u',
+                        'À':'A','Á':'A','Â':'A','Ä':'A','È':'E','É':'E','Ê':'E','Ë':'E',
+                        'Ì':'I','Í':'I','Î':'I','Ï':'I','Ò':'O','Ó':'O','Ô':'O','Ö':'O',
+                        'Ù':'U','Ú':'U','Û':'U','Ü':'U',
+                        '’':'','ʼ':'','\'':'','`':'','´':''
+                    })
+                    return s.translate(trans)
+                search_term_unaccent = strip_accents(search_term_clean)
                 search_words = [w.strip() for w in search_term_clean.split() if len(w.strip()) > 2]
                 search_pattern = f"%{search_term_clean}%"
+                search_pattern_unaccent = f"%{search_term_unaccent}%"
                 
                 search_numeric = None
                 search_float = None
@@ -252,7 +269,11 @@ class AsyncDatabaseManager:
                     "country ILIKE :search_pattern",
                     "wine_type ILIKE :search_pattern",
                     "classification ILIKE :search_pattern",
-                    "grape_variety ILIKE :search_pattern"
+                    "grape_variety ILIKE :search_pattern",
+                    # Match accent-insensitive usando translate su PostgreSQL
+                    "translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
+                    "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
+                    "translate(lower(classification), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
                 ]
                 
                 if len(search_words) > 1:
@@ -270,6 +291,9 @@ class AsyncDatabaseManager:
                 query_params = {
                     "user_id": user.id,
                     "search_pattern": search_pattern,
+                    "search_pattern_unaccent": search_pattern_unaccent,
+                    "accent_from": accent_from,
+                    "accent_to": accent_to,
                     "limit": limit
                 }
                 
