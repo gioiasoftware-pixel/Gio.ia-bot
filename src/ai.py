@@ -8,8 +8,9 @@ from .database_async import async_db_manager
 from .response_templates import (
     format_inventory_list, format_wine_quantity, format_wine_price,
     format_wine_info, format_wine_not_found, format_wine_exists,
-    format_low_stock_alert, format_inventory_summary
+    format_low_stock_alert, format_inventory_summary, format_movement_period_summary
 )
+from .database_async import get_movement_summary
 
 # Carica direttamente la variabile ambiente
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -48,6 +49,9 @@ def _is_movement_summary_request(prompt: str) -> bool:
         r"\bconsumi\s+recenti\b",
         r"\bmovimenti\s+recenti\b",
         r"\bmi\s+dici\s+i\s+miei\s+ultimi\s+consumi\b",
+        r"\bmi\s+dici\s+gli\s+ultimi\s+miei\s+consumi\b",
+        r"\bultimi\s+miei\s+consumi\b",
+        r"\bmostra\s+(ultimi|recenti)\s+(consumi|movimenti)\b",
         r"\briepilogo\s+(consumi|movimenti)\b",
     ]
     return any(re.search(pt, p) for pt in patterns)
@@ -699,6 +703,20 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 }
             }
         ]
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "get_movement_summary",
+                "description": "Riepiloga consumi/rifornimenti per un periodo (day/week/month). Se periodo mancante, chiedilo all'utente.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "period": {"type": "string", "enum": ["day", "week", "month"], "description": "Periodo del riepilogo"}
+                    },
+                    "required": []
+                }
+            }
+        })
 
         # Chiamata API con gestione errori robusta
         try:
@@ -778,6 +796,17 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 if wines:
                     return format_wine_quantity(wines[0])
                 return format_wine_not_found(query)
+
+            if name == "get_movement_summary":
+                period = (args.get("period") or "").strip()
+                if not period:
+                    return "[[ASK_MOVES_PERIOD]]"
+                try:
+                    totals = await get_movement_summary(telegram_id, period)
+                    return format_movement_period_summary(period, totals)
+                except Exception as e:
+                    logger.error(f"Errore get_movement_summary tool: {e}")
+                    return "⚠️ Errore nel calcolo dei movimenti. Riprova."
 
         # Nessuna tool call: usa il contenuto generato
         content = getattr(message, "content", "") or ""
