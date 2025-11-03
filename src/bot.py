@@ -304,20 +304,33 @@ async def chat_handler(update, context):
                 logger.info(f"Movimento processato e risposta inviata a {username}")
                 return
         
-        # Risposta normale AI con eventuali bottoni per compilare campi mancanti
-        if reply and "[[FILL_FIELDS:" in reply:
+        # Risposta normale AI con eventuali bottoni per compilare/modificare campi
+        if reply and ("[[FILL_FIELDS:" in reply or "[[EDIT_FIELDS:" in reply):
             try:
-                marker_start = reply.rfind("[[FILL_FIELDS:")
-                marker_text = reply[marker_start:].strip()
-                # Formato: [[FILL_FIELDS:wine_id:field1,field2,...]]
-                marker_inner = marker_text.strip("[]")
-                parts = marker_inner.split(":", 2)
-                wine_id = int(parts[1]) if len(parts) > 1 else None
-                fields = parts[2].split(",") if len(parts) > 2 else []
-                reply_clean = reply[:marker_start].rstrip()
-
-                fields = [f for f in fields if f]
-                fields = fields[:6]
+                # Estrai tutti i marker
+                fill_marker = None
+                edit_marker = None
+                
+                if "[[FILL_FIELDS:" in reply:
+                    fill_start = reply.rfind("[[FILL_FIELDS:")
+                    fill_text = reply[fill_start:reply.find("]]", fill_start) + 2] if reply.find("]]", fill_start) >= 0 else None
+                    if fill_text:
+                        fill_marker = fill_text
+                
+                if "[[EDIT_FIELDS:" in reply:
+                    edit_start = reply.rfind("[[EDIT_FIELDS:")
+                    edit_text = reply[edit_start:reply.find("]]", edit_start) + 2] if reply.find("]]", edit_start) >= 0 else None
+                    if edit_text:
+                        edit_marker = edit_text
+                
+                # Pulisci reply rimuovendo tutti i marker
+                reply_clean = reply
+                if fill_marker:
+                    reply_clean = reply_clean.replace(fill_marker, "").strip()
+                if edit_marker:
+                    reply_clean = reply_clean.replace(edit_marker, "").strip()
+                reply_clean = reply_clean.rstrip()
+                
                 label_map = {
                     "selling_price": "Prezzo vendita",
                     "cost_price": "Prezzo acquisto",
@@ -329,11 +342,42 @@ async def chat_handler(update, context):
                     "notes": "Note",
                     "producer": "Produttore",
                 }
-                buttons = [[InlineKeyboardButton(f"✏️ {label_map.get(f, f)}", callback_data=f"fill:{wine_id}:{f}")]
-                           for f in fields]
-                keyboard = InlineKeyboardMarkup(buttons)
-                await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
-            except Exception:
+                
+                buttons = []
+                
+                # Bottoni per campi mancanti (FILL)
+                if fill_marker:
+                    marker_inner = fill_marker.strip("[]")
+                    parts = marker_inner.split(":", 2)
+                    wine_id = int(parts[1]) if len(parts) > 1 else None
+                    fields = parts[2].split(",") if len(parts) > 2 else []
+                    fields = [f for f in fields if f][:6]
+                    for f in fields:
+                        buttons.append([InlineKeyboardButton(
+                            f"➕ {label_map.get(f, f)}",
+                            callback_data=f"fill:{wine_id}:{f}"
+                        )])
+                
+                # Bottoni per campi esistenti (EDIT)
+                if edit_marker:
+                    marker_inner = edit_marker.strip("[]")
+                    parts = marker_inner.split(":", 2)
+                    wine_id = int(parts[1]) if len(parts) > 1 else None
+                    fields = parts[2].split(",") if len(parts) > 2 else []
+                    fields = [f for f in fields if f][:6]
+                    for f in fields:
+                        buttons.append([InlineKeyboardButton(
+                            f"✏️ Modifica {label_map.get(f, f)}",
+                            callback_data=f"fill:{wine_id}:{f}"
+                        )])
+                
+                if buttons:
+                    keyboard = InlineKeyboardMarkup(buttons)
+                    await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    await update.message.reply_text(reply_clean, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Errore parsing marker bottoni: {e}")
                 await update.message.reply_text(reply, parse_mode='Markdown')
         else:
             await update.message.reply_text(reply, parse_mode='Markdown')
