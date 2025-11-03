@@ -20,6 +20,54 @@ os.environ.pop('all_proxy', None)
 logger = logging.getLogger(__name__)
 
 
+def _is_inventory_list_request(prompt: str) -> bool:
+    """Riconosce richieste tipo: che vini ho? elenco/lista inventario, mostra inventario, ecc."""
+    p = prompt.lower().strip()
+    patterns = [
+        r"\bche\s+vini\s+ho\b",
+        r"\belenco\s+vini\b",
+        r"\blista\s+vini\b",
+        r"\bmostra\s+inventario\b",
+        r"\bvedi\s+inventario\b",
+        r"\binventario\b",
+    ]
+    return any(re.search(pt, p) for pt in patterns)
+
+
+async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> str:
+    """Recupera l'inventario utente e lo formatta in elenco ordinato con quantità e prezzi se disponibili."""
+    try:
+        wines = await async_db_manager.get_user_wines(telegram_id)
+        if not wines:
+            return (
+                "📋 Inventario\n"
+                "━" * 30 + "\n"
+                "Non ho trovato vini nel tuo inventario.\n"
+                "Puoi caricare un CSV o una foto con /upload"
+            )
+
+        # Ordina alfabeticamente, limita il numero di righe
+        wines_sorted = sorted(wines, key=lambda w: (w.name or "").lower())[:limit]
+        lines = ["📋 Inventario", "━" * 30]
+        for idx, w in enumerate(wines_sorted, start=1):
+            qty = f"{w.quantity} bott." if getattr(w, "quantity", None) is not None else "n/d"
+            price = f" - €{w.selling_price:.2f}" if getattr(w, "selling_price", None) else ""
+            name = w.name or "Senza nome"
+            producer = f" ({w.producer})" if getattr(w, "producer", None) else ""
+            vintage = f" {w.vintage}" if getattr(w, "vintage", None) else ""
+            lines.append(f"{idx}. {name}{producer}{vintage} — {qty}{price}")
+
+        if len(wines) > limit:
+            lines.append(f"… e altri {len(wines) - limit} vini")
+
+        lines.append("━" * 30)
+        lines.append("Puoi cercare un vino scrivendo il nome, es: 'Barolo Cannubi' oppure usare /inventario")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Errore creazione lista inventario: {e}")
+        return "⚠️ Errore nel recupero dell'inventario. Riprova con /inventario."
+
+
 async def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
     """
     Usa OpenAI per rilevare se il messaggio è un movimento inventario quando regex non match.
@@ -414,6 +462,10 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
     # Rileva movimenti inventario PRIMA di chiamare l'AI - ASYNC
     # Se riconosce un movimento, ritorna un marker speciale che il bot.py interpreterà
     if telegram_id:
+        # Richieste esplicite di elenco inventario: rispondi direttamente interrogando il DB
+        if _is_inventory_list_request(prompt):
+            return await _build_inventory_list_response(telegram_id, limit=50)
+
         movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
             return movement_marker  # Ritorna marker che verrà processato in bot.py
