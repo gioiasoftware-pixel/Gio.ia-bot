@@ -28,8 +28,22 @@ logger = logging.getLogger(__name__)
 
 
 def _is_inventory_list_request(prompt: str) -> bool:
-    """Riconosce richieste tipo: che vini ho? elenco/lista inventario, mostra inventario, ecc."""
+    """
+    Riconosce richieste tipo: che vini ho? elenco/lista inventario, mostra inventario, ecc.
+    IMPORTANTE: NON matchare se la richiesta contiene filtri (region, tipo, paese, prezzo) -
+    in quel caso passa all'AI che userà search_wines.
+    """
     p = prompt.lower().strip()
+    
+    # Se contiene filtri, NON è una richiesta lista semplice → passa all'AI
+    filter_keywords = [
+        'della', 'del', 'dello', 'delle', 'degli', 'di', 'itali', 'frances', 'spagnol', 'tedesc',
+        'toscana', 'piemonte', 'veneto', 'sicilia', 'rosso', 'bianco', 'spumante', 'rosato',
+        'prezzo', 'annata', 'produttore', 'cantina', 'azienda'
+    ]
+    if any(kw in p for kw in filter_keywords):
+        return False  # Passa all'AI con search_wines
+    
     patterns = [
         r"\bche\s+vini\s+ho\b",
         r"\belenco\s+vini\b",
@@ -69,16 +83,35 @@ async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> s
 
 
 def _parse_filters(prompt: str) -> dict:
-    """Estrae filtri semplici dal linguaggio naturale (regioni, tipo, prezzo, annata, produttore)."""
+    """Estrae filtri semplici dal linguaggio naturale (regioni, tipo, prezzo, annata, produttore, paese)."""
     p = prompt.lower()
     filters = {}
+    
+    # Paese (deve essere prima delle regioni per evitare conflitti)
+    if re.search(r'\bitali[ae]?\b', p):
+        filters['country'] = 'Italia'
+    if re.search(r'\bfrances[ei]?\b', p):
+        filters['country'] = 'Francia'
+    if re.search(r'\bspagnol[oi]?\b', p):
+        filters['country'] = 'Spagna'
+    if re.search(r'\btedesc[hi]?\b', p):
+        filters['country'] = 'Germania'
+    
+    # Regioni (solo se non c'è già un filtro paese o se è Italia)
     regions = [
-        'toscana','piemonte','veneto','sicilia','sardegna','lombardia','marche','umbria','lazio',
+        'toscana','toscata',  # Fix: "toscata" → "Toscana"
+        'piemonte','veneto','sicilia','sardegna','lombardia','marche','umbria','lazio',
         'puglia','abruzzo','friuli','trentino','alto adige','campania','liguria','emilia','romagna'
     ]
     for r in regions:
         if r in p:
-            filters['region'] = 'Alto Adige' if r == 'alto adige' else r.capitalize()
+            # Normalizza variazioni
+            if r == 'toscata':
+                filters['region'] = 'Toscana'
+            elif r == 'alto adige':
+                filters['region'] = 'Alto Adige'
+            else:
+                filters['region'] = r.capitalize()
             break
     if re.search(r'\brossi?\b', p):
         filters['wine_type'] = 'rosso'
@@ -592,6 +625,12 @@ ISTRUZIONI IMPORTANTI:
 - Se l'inventario ha scorte basse, avvisa proattivamente
 - Se l'utente fa domande generiche, usa il contesto per essere specifico
 
+REGOLA CRITICA PER RICERCHE FILTRATE:
+- Se l'utente chiede vini con QUALSIASI filtro geografico/tipo/prezzo/annata (es. "della Toscana", "italiani", "rossi", "sotto €50"), DEVI chiamare search_wines con i filtri estratti
+- NON usare get_inventory_list se ci sono filtri nella richiesta
+- Estrai filtri dal testo: "della Toscana" → {"region": "Toscana"}, "italiani" → {"country": "Italia"}, "rossi" → {"wine_type": "rosso"}
+- Combina filtri quando presenti: "rossi italiani" → {"country": "Italia", "wine_type": "rosso"}
+
 FORMATO RISPOSTE PRE-STRUTTURATE:
 Per domande informative, usa questi formati con dati reali dal database:
 
@@ -747,11 +786,36 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 "type": "function",
                 "function": {
                     "name": "search_wines",
-                    "description": "Cerca vini applicando filtri multipli (region, wine_type, price/vintage range, producer, name_contains).",
+                    "description": """Cerca vini applicando filtri multipli. USA QUESTA FUNZIONE quando l'utente chiede vini con criteri specifici:
+- Geografici: 'della Toscana', 'italiani', 'del Piemonte', 'francesi', ecc.
+- Tipo: 'rossi', 'bianchi', 'spumanti', 'rosati'
+- Prezzo: 'prezzo sotto X', 'prezzo sopra Y'
+- Annata: 'dal 2015', 'fino al 2020'
+- Produttore: 'produttore X', 'cantina Y'
+- Combinati: 'rossi toscani', 'italiani sotto €50'
+
+IMPORTANTE: Se la richiesta contiene QUALSIASI filtro, usa questa funzione invece di get_inventory_list.
+Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso", "price_max": 50, "vintage_min": 2015, "producer": "nome", "name_contains": "testo"}""",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "filters": {"type": "object"},
+                            "filters": {
+                                "type": "object",
+                                "properties": {
+                                    "region": {"type": "string", "description": "Regione italiana (es. 'Toscana', 'Piemonte')"},
+                                    "country": {"type": "string", "description": "Paese (es. 'Italia', 'Francia', 'Spagna')"},
+                                    "wine_type": {"type": "string", "enum": ["rosso", "bianco", "rosato", "spumante"]},
+                                    "classification": {"type": "string"},
+                                    "producer": {"type": "string", "description": "Nome produttore/cantina"},
+                                    "name_contains": {"type": "string", "description": "Testo contenuto nel nome vino"},
+                                    "price_min": {"type": "number", "description": "Prezzo minimo vendita"},
+                                    "price_max": {"type": "number", "description": "Prezzo massimo vendita"},
+                                    "vintage_min": {"type": "integer", "description": "Annata minima (es. 2015)"},
+                                    "vintage_max": {"type": "integer", "description": "Annata massima (es. 2020)"},
+                                    "quantity_min": {"type": "integer"},
+                                    "quantity_max": {"type": "integer"}
+                                }
+                            },
                             "limit": {"type": "integer", "default": 50}
                         },
                         "required": ["filters"]
@@ -865,13 +929,18 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 from .database_async import async_db_manager
                 filters = args.get("filters") or {}
                 limit = int(args.get("limit", 50))
-                # Fallback: arricchisci filtri dal prompt
+                
+                # Arricchisci filtri dal prompt (parser fallback se AI non ha estratto tutto)
                 derived = _parse_filters(prompt)
-                filters = {**derived, **filters}
-                wines = await async_db_manager.search_wines_filtered(telegram_id, filters, limit=limit)
+                # Merge: derived ha priorità (più accurato), poi filtri AI, poi derived se mancanti
+                merged_filters = {**filters, **{k: v for k, v in derived.items() if k not in filters or not filters.get(k)}}
+                
+                logger.info(f"[SEARCH] Filtri applicati: {merged_filters}")
+                wines = await async_db_manager.search_wines_filtered(telegram_id, merged_filters, limit=limit)
+                
                 if wines:
                     return format_inventory_list(wines, limit=limit)
-                return format_search_no_results(filters)
+                return format_search_no_results(merged_filters)
 
             if name == "get_inventory_stats":
                 from .database_async import async_db_manager
