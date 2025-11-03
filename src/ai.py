@@ -5,6 +5,11 @@ import asyncio
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database_async import async_db_manager
+from .response_templates import (
+    format_inventory_list, format_wine_quantity, format_wine_price,
+    format_wine_info, format_wine_not_found, format_wine_exists,
+    format_low_stock_alert, format_inventory_summary
+)
 
 # Carica direttamente la variabile ambiente
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -35,34 +40,10 @@ def _is_inventory_list_request(prompt: str) -> bool:
 
 
 async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> str:
-    """Recupera l'inventario utente e lo formatta in elenco ordinato con quantità e prezzi se disponibili."""
+    """Recupera l'inventario utente e lo formatta usando template pre-strutturato."""
     try:
         wines = await async_db_manager.get_user_wines(telegram_id)
-        if not wines:
-            return (
-                "📋 Inventario\n"
-                "━" * 30 + "\n"
-                "Non ho trovato vini nel tuo inventario.\n"
-                "Puoi caricare un CSV o una foto con /upload"
-            )
-
-        # Ordina alfabeticamente, limita il numero di righe
-        wines_sorted = sorted(wines, key=lambda w: (w.name or "").lower())[:limit]
-        lines = ["📋 Inventario", "━" * 30]
-        for idx, w in enumerate(wines_sorted, start=1):
-            qty = f"{w.quantity} bott." if getattr(w, "quantity", None) is not None else "n/d"
-            price = f" - €{w.selling_price:.2f}" if getattr(w, "selling_price", None) else ""
-            name = w.name or "Senza nome"
-            producer = f" ({w.producer})" if getattr(w, "producer", None) else ""
-            vintage = f" {w.vintage}" if getattr(w, "vintage", None) else ""
-            lines.append(f"{idx}. {name}{producer}{vintage} — {qty}{price}")
-
-        if len(wines) > limit:
-            lines.append(f"… e altri {len(wines) - limit} vini")
-
-        lines.append("━" * 30)
-        lines.append("Puoi cercare un vino scrivendo il nome, es: 'Barolo Cannubi' oppure usare /inventario")
-        return "\n".join(lines)
+        return format_inventory_list(wines, limit=limit)
     except Exception as e:
         logger.error(f"Errore creazione lista inventario: {e}")
         return "⚠️ Errore nel recupero dell'inventario. Riprova con /inventario."
@@ -354,91 +335,28 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
     # Controlla pattern "quanti X ho"
     for pattern in quantity_patterns:
         if re.search(pattern, prompt_lower):
-            if wine.quantity is not None:
-                return (
-                    f"🍷 **{wine.name}**\n"
-                    f"{'━' * 30}\n"
-                    f"📦 **In cantina hai:** {wine.quantity} bottiglie\n"
-                    f"{'━' * 30}"
-                )
-            else:
-                return (
-                    f"🍷 **{wine.name}**\n"
-                    f"{'━' * 30}\n"
-                    f"❓ **Quantità non disponibile**\n"
-                    f"💡 Se vuoi, posso aggiungerla all'inventario!\n"
-                    f"{'━' * 30}"
-                )
+            return format_wine_quantity(wine)
     
     # Controlla pattern "quanto vendo X"
     for pattern in price_patterns:
         if re.search(pattern, prompt_lower):
-            response_parts = [f"🍷 **{wine.name}**", "━" * 30]
-            
-            if wine.selling_price:
-                response_parts.append(f"💰 **Prezzo vendita:** €{wine.selling_price:.2f}")
-            else:
-                response_parts.append(f"❓ **Prezzo vendita non disponibile**")
-            
-            if wine.cost_price:
-                response_parts.append(f"💵 **Prezzo acquisto:** €{wine.cost_price:.2f}")
-                if wine.selling_price:
-                    margin = wine.selling_price - wine.cost_price
-                    margin_pct = (margin / wine.cost_price) * 100
-                    response_parts.append(f"📊 **Margine:** €{margin:.2f} ({margin_pct:.1f}%)")
-            
-            response_parts.append("━" * 30)
-            return "\n".join(response_parts)
+            return format_wine_price(wine)
     
     # Controlla pattern "info/dettagli su X"
     for pattern in info_patterns:
         if re.search(pattern, prompt_lower):
-            response_parts = [f"🍷 **{wine.name}**", "━" * 30]
-            
-            if wine.producer:
-                response_parts.append(f"🏭 **Produttore:** {wine.producer}")
-            
-            if wine.region:
-                location = wine.region
-                if wine.country:
-                    location += f", {wine.country}"
-                response_parts.append(f"📍 **Regione:** {location}")
-            elif wine.country:
-                response_parts.append(f"🇮🇹 **Paese:** {wine.country}")
-            
-            if wine.vintage:
-                response_parts.append(f"📅 **Annata:** {wine.vintage}")
-            
-            if wine.grape_variety:
-                response_parts.append(f"🍇 **Vitigno:** {wine.grape_variety}")
-            
-            if wine.quantity is not None:
-                response_parts.append(f"📦 **Quantità:** {wine.quantity} bottiglie")
-            
-            if wine.wine_type:
-                type_emoji = {"rosso": "🔴", "bianco": "⚪", "rosato": "🩷", "spumante": "🍾"}.get(wine.wine_type.lower(), "🍷")
-                response_parts.append(f"{type_emoji} **Tipo:** {wine.wine_type.capitalize()}")
-            
-            if wine.classification:
-                response_parts.append(f"⭐ **Classificazione:** {wine.classification}")
-            
-            if wine.selling_price:
-                response_parts.append(f"💰 **Prezzo vendita:** €{wine.selling_price:.2f}")
-            
-            if wine.cost_price:
-                response_parts.append(f"💵 **Prezzo acquisto:** €{wine.cost_price:.2f}")
-            
-            if wine.alcohol_content:
-                response_parts.append(f"🍾 **Gradazione:** {wine.alcohol_content}% vol")
-            
-            if wine.description:
-                response_parts.append(f"📝 **Descrizione:** {wine.description}")
-            
-            if wine.notes:
-                response_parts.append(f"💬 **Note:** {wine.notes}")
-            
-            response_parts.append("━" * 30)
-            return "\n".join(response_parts)
+            return format_wine_info(wine)
+    
+    # Pattern per "X c'è?", "hai X?", "ce l'ho X?"
+    exists_patterns = [
+        r'(.+?)\s+c\'è\??',
+        r'hai\s+(.+)',
+        r'ce\s+l\'ho\s+(.+)',
+        r'(.+?)\s+(?:è|ci sono|ce l\'hai)',
+    ]
+    for pattern in exists_patterns:
+        if re.search(pattern, prompt_lower):
+            return format_wine_exists(wine)
     
     # Se nessun pattern match, passa all'AI
     return None
@@ -584,6 +502,7 @@ CAPACITÀ:
 - Conversazione naturale e coinvolgente
 
 ISTRUZIONI IMPORTANTI:
+- CONSULTA SEMPRE il database prima di rispondere a qualsiasi domanda informativa
 - RISPONDI SEMPRE a qualsiasi messaggio, anche se non è una domanda
 - Mantieni una conversazione naturale e amichevole
 - Usa sempre i dati dell'inventario e dei movimenti quando disponibili
@@ -591,7 +510,66 @@ ISTRUZIONI IMPORTANTI:
 - Se l'utente comunica consumi/rifornimenti, conferma e analizza
 - Suggerisci comandi del bot quando appropriato (es: /inventario, /log)
 - Se l'inventario ha scorte basse, avvisa proattivamente
-- Se l'utente fa domande generiche, usa il contesto per essere specifico"""
+- Se l'utente fa domande generiche, usa il contesto per essere specifico
+
+FORMATO RISPOSTE PRE-STRUTTURATE:
+Per domande informative, usa questi formati con dati reali dal database:
+
+1. ELENCO INVENTARIO ("che vini ho?", "lista inventario"):
+📋 **Il tuo inventario**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Nome Vino (Produttore) Annata — quantità bott. - €prezzo
+2. ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+2. QUANTITÀ VINO ("quanti X ho?"):
+🍷 **Nome Vino (Produttore)**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 **In cantina hai:** X bottiglie
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3. PREZZO VINO ("a quanto vendo X?"):
+🍷 **Nome Vino (Produttore)**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Prezzo vendita:** €XX.XX
+💵 **Prezzo acquisto:** €XX.XX
+📊 **Margine:** €XX.XX (XX%)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4. INFO COMPLETE VINO ("dimmi tutto su X"):
+🍷 **Nome Vino (Produttore)**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏭 **Produttore:** ...
+📍 **Regione:** ...
+📅 **Annata:** ...
+🍇 **Vitigno:** ...
+📦 **Quantità:** X bottiglie
+🔴/⚪ **Tipo:** ...
+⭐ **Classificazione:** ...
+💰 **Prezzo vendita:** €XX.XX
+💵 **Prezzo acquisto:** €XX.XX
+🍾 **Gradazione:** XX% vol
+📝 **Descrizione:** ...
+💬 **Note:** ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5. VINO NON TROVATO:
+❌ **Vino non trovato**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Non ho trovato 'nome' nel tuo inventario.
+💡 **Cosa puoi fare:**
+• Controlla l'ortografia del nome
+• Usa /inventario per vedere tutti i vini
+• Usa /aggiungi per aggiungere un nuovo vino
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+6. VINO PRESENTE ("X c'è?"):
+✅ **Sì, ce l'hai!**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🍷 **Nome Vino (Produttore)** con X bottiglie
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMPRE il database usando i dati forniti nel contesto o cerca il vino specifico se necessario."""
         
         logger.info(f"System prompt length: {len(system_prompt)}")
         logger.info(f"User prompt: {prompt[:100]}...")
