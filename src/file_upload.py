@@ -4,7 +4,7 @@ NOTA: L'elaborazione dei file è ora gestita dal microservizio processor
 """
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from .database_async import Wine  # Solo per modello se necessario
@@ -21,6 +21,125 @@ class FileUploadManager:
             'Fornitore', 'Costo', 'Prezzo in carta', 'Quantità in magazzino',
             'Annata', 'Note', 'Denominazione', 'Formato', 'Alcol', 'Codice'
         ]
+    
+    def estimate_processing_time(self, file_type: str, file_size: int, file_content: Optional[bytes] = None) -> Tuple[int, int]:
+        """
+        Stima tempo elaborazione inventario in secondi.
+        
+        Args:
+            file_type: 'csv', 'excel', 'photo', 'pdf'
+            file_size: Dimensione file in bytes
+            file_content: Contenuto file opzionale per stima più precisa
+            
+        Returns:
+            (tempo_min_secondi, tempo_max_secondi)
+        """
+        # Stima numero vini approssimativo basato su dimensione file
+        estimated_wines = 0
+        
+        if file_type in ['csv', 'excel']:
+            # CSV/Excel: ~200-500 bytes per riga (dipende da numero colonne)
+            # Stimiamo 300 bytes per riga in media
+            avg_bytes_per_row = 300
+            estimated_wines = max(1, int(file_size / avg_bytes_per_row))
+            
+            # Overhead: parsing, mapping colonne, AI se necessario (5-15 sec)
+            overhead_min = 5
+            overhead_max = 15
+            
+            # Tempo per vino: validazione, normalizzazione, DB (0.3-1.0 sec)
+            per_wine_min = 0.3
+            per_wine_max = 1.0
+            
+        elif file_type == 'photo':
+            # OCR: molto più variabile, difficile da stimare
+            # Basato su risoluzione/qualità immagine, stimiamo 10-50 vini per immagine tipica
+            # Per immagini più grandi, più vini potenzialmente visibili
+            if file_size < 100_000:  # < 100KB
+                estimated_wines = 10
+            elif file_size < 500_000:  # < 500KB
+                estimated_wines = 25
+            elif file_size < 1_000_000:  # < 1MB
+                estimated_wines = 40
+            else:  # >= 1MB
+                estimated_wines = 60
+            
+            # Overhead: preprocessing, OCR, estrazione (15-45 sec)
+            overhead_min = 15
+            overhead_max = 45
+            
+            # Tempo per vino: parsing OCR, AI enhancement (2-5 sec)
+            per_wine_min = 2
+            per_wine_max = 5
+            
+        elif file_type == 'pdf':
+            # PDF: simile a CSV se pulito, altrimenti simile a OCR
+            # Stimiamo basandoci su dimensione
+            avg_bytes_per_wine = 400  # PDF tende ad essere più verboso
+            estimated_wines = max(1, int(file_size / avg_bytes_per_wine))
+            
+            # Overhead: estrazione testo PDF (10-30 sec)
+            overhead_min = 10
+            overhead_max = 30
+            
+            # Tempo per vino: 1-3 sec (intermedio tra CSV e OCR)
+            per_wine_min = 1
+            per_wine_max = 3
+            
+        else:
+            # Tipo sconosciuto: stima conservativa
+            estimated_wines = 20
+            overhead_min = 10
+            overhead_max = 30
+            per_wine_min = 1
+            per_wine_max = 3
+        
+        # Calcola tempo totale
+        time_min = int(overhead_min + (estimated_wines * per_wine_min))
+        time_max = int(overhead_max + (estimated_wines * per_wine_max))
+        
+        # Arrotonda a multipli di 5 secondi per leggibilità
+        time_min = ((time_min + 4) // 5) * 5
+        time_max = ((time_max + 4) // 5) * 5
+        
+        # Limita range minimo
+        time_min = max(10, time_min)  # Almeno 10 secondi
+        time_max = max(time_min + 5, time_max)  # Max almeno 5 sec più di min
+        
+        return time_min, time_max
+    
+    def format_estimated_time(self, time_min: int, time_max: int) -> str:
+        """
+        Formatta tempo stimato in formato leggibile (es. "1-3 minuti", "30-60 secondi").
+        """
+        def format_seconds(sec: int) -> str:
+            if sec < 60:
+                return f"{sec} secondi"
+            elif sec < 3600:
+                minutes = sec // 60
+                return f"{minutes} {'minuto' if minutes == 1 else 'minuti'}"
+            else:
+                hours = sec // 3600
+                minutes = (sec % 3600) // 60
+                if minutes == 0:
+                    return f"{hours} {'ora' if hours == 1 else 'ore'}"
+                else:
+                    return f"{hours} {'ora' if hours == 1 else 'ore'} e {minutes} {'minuto' if minutes == 1 else 'minuti'}"
+        
+        time_min_str = format_seconds(time_min)
+        time_max_str = format_seconds(time_max)
+        
+        if time_min == time_max:
+            return time_min_str
+        
+        # Se stesso formato (entrambi secondi o entrambi minuti), semplifica
+        if time_min < 60 and time_max < 60:
+            return f"{time_min}-{time_max} secondi"
+        elif time_min >= 60 and time_max < 3600 and (time_min // 60) == (time_max // 60):
+            minutes = time_min // 60
+            return f"{minutes} {'minuto' if minutes == 1 else 'minuti'}"
+        else:
+            return f"{time_min_str} - {time_max_str}"
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Gestisce upload documenti (CSV, Excel)"""
@@ -67,11 +186,16 @@ class FileUploadManager:
                     # Determina tipo file
                     file_type = 'csv' if file_name.endswith('.csv') else 'excel'
                     
+                    # Stima tempo elaborazione
+                    time_min, time_max = self.estimate_processing_time(file_type, document.file_size, file_content)
+                    time_estimate = self.format_estimated_time(time_min, time_max)
+                    
                     await update.message.reply_text(
                         "✅ **File ricevuto!**\n\n"
                         f"📄 **Nome**: {document.file_name}\n"
                         f"📊 **Dimensione**: {document.file_size:,} bytes\n\n"
                         "🔄 **Elaborazione in corso...**\n"
+                        f"⏱️ **Tempo stimato**: {time_estimate}\n\n"
                         "Il file verrà processato dal sistema di elaborazione."
                     )
                     
@@ -126,12 +250,18 @@ class FileUploadManager:
                 )
                 return True
             
+            # Stima tempo elaborazione per messaggio progress
+            file_type = 'csv' if file_name.endswith('.csv') else 'excel'
+            time_min, time_max = self.estimate_processing_time(file_type, len(file_content), file_content)
+            time_estimate = self.format_estimated_time(time_min, time_max)
+            
             # Notifica utente che elaborazione è iniziata
             progress_msg = await update.message.reply_text(
                 f"✅ **File ricevuto!**\n\n"
                 f"📄 **Nome**: {document.file_name}\n"
                 f"📊 **Dimensione**: {len(file_content):,} bytes\n"
                 f"🔄 **Elaborazione in corso...**\n"
+                f"⏱️ **Tempo stimato**: {time_estimate}\n"
                 f"📋 Job ID: `{job_id}`\n\n"
                 f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
                 parse_mode='Markdown'
@@ -262,10 +392,15 @@ class FileUploadManager:
                     file_obj = await context.bot.get_file(photo.file_id)
                     file_content = await file_obj.download_as_bytearray()
                     
+                    # Stima tempo elaborazione OCR
+                    time_min, time_max = self.estimate_processing_time('photo', len(file_content), file_content)
+                    time_estimate = self.format_estimated_time(time_min, time_max)
+                    
                     await update.message.reply_text(
                         "✅ **Foto ricevuta!**\n\n"
                         f"📷 **Risoluzione**: {photo.width}x{photo.height}\n\n"
                         "🔄 **Elaborazione OCR in corso...**\n"
+                        f"⏱️ **Tempo stimato**: {time_estimate}\n\n"
                         "La foto verrà processata per estrarre i dati dell'inventario."
                     )
                     
@@ -320,10 +455,15 @@ class FileUploadManager:
                 )
                 return True
             
+            # Stima tempo elaborazione OCR per messaggio progress
+            time_min, time_max = self.estimate_processing_time('photo', len(file_content), file_content)
+            time_estimate = self.format_estimated_time(time_min, time_max)
+            
             # Notifica utente che elaborazione è iniziata
             progress_msg = await update.message.reply_text(
                 f"✅ **Foto ricevuta!**\n\n"
                 f"🔄 **Elaborazione OCR in corso...**\n"
+                f"⏱️ **Tempo stimato**: {time_estimate}\n"
                 f"📋 Job ID: `{job_id}`\n\n"
                 f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
                 parse_mode='Markdown'
