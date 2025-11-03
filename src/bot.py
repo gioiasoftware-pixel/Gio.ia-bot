@@ -226,6 +226,12 @@ async def chat_handler(update, context):
         if await new_onboarding_manager.handle_ai_guided_response(update, context):
             return
         
+        # Logga messaggio utente nella chat history
+        try:
+            await async_db_manager.log_chat_message(telegram_id, 'user', user_text)
+        except Exception:
+            pass
+
         # Gestisci movimenti inventario
         logger.info(f"[BOT] Calling process_movement_message for: {user_text[:50]}...")
         movement_handled = await inventory_movement_manager.process_movement_message(update, context)
@@ -265,6 +271,11 @@ async def chat_handler(update, context):
         
         # Risposta normale AI
         await update.message.reply_text(reply)
+        # Logga risposta assistant
+        try:
+            await async_db_manager.log_chat_message(telegram_id, 'assistant', reply)
+        except Exception:
+            pass
         logger.info(f"Risposta inviata a {username}")
         
     except Exception as e:

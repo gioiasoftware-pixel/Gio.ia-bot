@@ -539,16 +539,21 @@ ISTRUZIONI IMPORTANTI:
 - Se l'utente comunica consumi/rifornimenti, conferma e analizza
 - Suggerisci comandi del bot quando appropriato (es: /inventario, /log)
 - Se l'inventario ha scorte basse, avvisa proattivamente
-- Se l'utente fa domande generiche, usa il contesto per essere specifico
-
-ESEMPI DI RISPOSTA:
-- "Ciao!" → Rispondi cordialmente e offri assistenza basata sull'inventario
-- "Come va?" → Rispondi e fornisci un breve status dell'inventario
-- "Ho venduto vino" → Conferma, congratulati e suggerisci di comunicare i dettagli
-- Domande generali → Rispondi e collega sempre al contesto dell'inventario"""
+- Se l'utente fa domande generiche, usa il contesto per essere specifico"""
         
         logger.info(f"System prompt length: {len(system_prompt)}")
         logger.info(f"User prompt: {prompt[:100]}...")
+
+        # Recupera storico conversazione (ultimi 10 messaggi) e costruisci chat
+        history_messages = []
+        if telegram_id:
+            try:
+                history = await async_db_manager.get_recent_chat_messages(telegram_id, limit=10)
+                for h in history:
+                    if h.get('role') in ('user', 'assistant') and h.get('content'):
+                        history_messages.append({"role": h['role'], "content": h['content']})
+            except Exception as e:
+                logger.warning(f"Impossibile recuperare chat history per {telegram_id}: {e}")
 
         # Configura client OpenAI versione 2.x
         try:
@@ -566,12 +571,15 @@ ESEMPI DI RISPOSTA:
         # Chiamata API con gestione errori robusta
         try:
             logger.info(f"Chiamata API OpenAI - Model: {OPENAI_MODEL}")
+            messages = [{"role": "system", "content": system_prompt}]
+            # Aggiungi storico conversazione (già normalizzato)
+            messages.extend(history_messages)
+            # Aggiungi ultimo messaggio utente
+            messages.append({"role": "user", "content": prompt.strip()})
+
             response = client.chat.completions.create(
                 model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt.strip()},
-                ],
+                messages=messages,
                 max_tokens=1500,
                 temperature=0.7
             )
