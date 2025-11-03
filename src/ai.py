@@ -629,7 +629,7 @@ REGOLA CRITICA PER RICERCHE FILTRATE:
 - Se l'utente chiede vini con QUALSIASI filtro geografico/tipo/prezzo/annata (es. "della Toscana", "italiani", "rossi", "sotto €50"), DEVI chiamare search_wines con i filtri estratti
 - NON usare get_inventory_list se ci sono filtri nella richiesta
 - Estrai filtri dal testo: "della Toscana" → {{"region": "Toscana"}}, "italiani" → {{"country": "Italia"}}, "rossi" → {{"wine_type": "rosso"}}
-- Combina filtri quando presenti: "rossi italiani" → {"country": "Italia", "wine_type": "rosso"}
+- Combina filtri quando presenti: "rossi italiani" → {{"country": "Italia", "wine_type": "rosso"}}
 
 FORMATO RISPOSTE PRE-STRUTTURATE:
 Per domande informative, usa questi formati con dati reali dal database:
