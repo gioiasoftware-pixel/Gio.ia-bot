@@ -622,6 +622,66 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
             logger.error(f"Tipo errore: {type(e).__name__}")
             logger.error(f"Errore completo: {str(e)}")
             return "Ciao! 👋 Sono Gio.ia-bot, il tuo assistente per la gestione inventario vini. Al momento l'AI è temporaneamente non disponibile, ma puoi usare i comandi /help per vedere le funzionalità disponibili!"
+        # Definizione tools (function calling) per accesso deterministico ai dati
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_inventory_list",
+                    "description": "Restituisce l'elenco dei vini dell'utente corrente con quantità e prezzi.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type": "integer", "description": "Numero massimo di vini da elencare", "default": 50}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_wine_info",
+                    "description": "Restituisce le informazioni dettagliate di un vino presente nell'inventario utente.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_query": {"type": "string", "description": "Nome o parte del nome del vino da cercare"}
+                        },
+                        "required": ["wine_query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_wine_price",
+                    "description": "Restituisce i prezzi (vendita/acquisto) per un vino dell'utente.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_query": {"type": "string", "description": "Nome o parte del nome del vino"}
+                        },
+                        "required": ["wine_query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_wine_quantity",
+                    "description": "Restituisce la quantità in magazzino per un vino dell'utente.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_query": {"type": "string", "description": "Nome o parte del nome del vino"}
+                        },
+                        "required": ["wine_query"]
+                    }
+                }
+            }
+        ]
+
         # Chiamata API con gestione errori robusta
         try:
             logger.info(f"Chiamata API OpenAI - Model: {OPENAI_MODEL}")
@@ -635,7 +695,9 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 model=OPENAI_MODEL,
                 messages=messages,
                 max_tokens=1500,
-                temperature=0.7
+                temperature=0.7,
+                tools=tools,
+                tool_choice="auto"
             )
             logger.info("Chiamata API OpenAI completata con successo")
         except Exception as e:
@@ -643,11 +705,68 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
             logger.error(f"Tipo errore: {type(e).__name__}")
             return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
         
-        if not response.choices or not response.choices[0].message.content:
+        # Se l'AI ha scelto di chiamare un tool, gestiscilo qui (function calling)
+        choice = response.choices[0]
+        message = choice.message
+
+        # Gestione tool calls
+        try:
+            tool_calls = getattr(message, "tool_calls", None)
+        except Exception:
+            tool_calls = None
+
+        if tool_calls and telegram_id:
+            # Esegui la prima tool call rilevante (una risposta deterministica e rapida)
+            call = tool_calls[0]
+            fn = call.function
+            name = getattr(fn, "name", "")
+            import json as _json
+            args = {}
+            try:
+                args = _json.loads(getattr(fn, "arguments", "{}") or "{}")
+            except Exception:
+                args = {}
+
+            logger.info(f"[TOOLS] AI ha richiesto tool: {name} args={args}")
+
+            # Implementazioni tool
+            if name == "get_inventory_list":
+                limit = int(args.get("limit", 50))
+                return await _build_inventory_list_response(telegram_id, limit=limit)
+
+            if name == "get_wine_info":
+                query = (args.get("wine_query") or "").strip()
+                if not query:
+                    return "❌ Richiesta incompleta: specifica il vino."
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                if wines:
+                    return format_wine_info(wines[0])
+                return format_wine_not_found(query)
+
+            if name == "get_wine_price":
+                query = (args.get("wine_query") or "").strip()
+                if not query:
+                    return "❌ Richiesta incompleta: specifica il vino."
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                if wines:
+                    return format_wine_price(wines[0])
+                return format_wine_not_found(query)
+
+            if name == "get_wine_quantity":
+                query = (args.get("wine_query") or "").strip()
+                if not query:
+                    return "❌ Richiesta incompleta: specifica il vino."
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                if wines:
+                    return format_wine_quantity(wines[0])
+                return format_wine_not_found(query)
+
+        # Nessuna tool call: usa il contenuto generato
+        content = getattr(message, "content", "") or ""
+        if not content.strip():
             logger.error("Risposta vuota da OpenAI")
             return "⚠️ Errore nella generazione della risposta. Riprova."
-            
-        return response.choices[0].message.content.strip()
+        return content.strip()
         
     except OpenAIError as e:
         logger.error(f"Errore OpenAI: {e}")
