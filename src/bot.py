@@ -90,21 +90,21 @@ async def testprocessor_cmd(update, context):
         result = await processor_client.health_check()
         
         if result.get('status') == 'healthy':
-                    await update.message.reply_text(
-                        f"✅ **Processor connesso!**\n\n"
+            await update.message.reply_text(
+                f"✅ **Processor connesso!**\n\n"
                 f"URL: {processor_client.base_url}\n"
-                        f"Status: {result.get('status', 'unknown')}\n"
+                f"Status: {result.get('status', 'unknown')}\n"
                 f"Service: {result.get('service', 'unknown')}\n"
                 f"AI Enabled: {result.get('ai_enabled', 'unknown')}\n"
                 f"Database: {result.get('database_status', 'unknown')}"
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ **Processor non raggiungibile**\n\n"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ **Processor non raggiungibile**\n\n"
                 f"URL: {processor_client.base_url}\n"
                 f"Status: {result.get('status', 'unknown')}\n"
                 f"Error: {result.get('error', 'Unknown error')}"
-                    )
+            )
     except Exception as e:
         await update.message.reply_text(
             f"❌ **Errore connessione processor**\n\n"
