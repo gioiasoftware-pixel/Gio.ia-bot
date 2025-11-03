@@ -628,7 +628,7 @@ ISTRUZIONI IMPORTANTI:
 REGOLA CRITICA PER RICERCHE FILTRATE:
 - Se l'utente chiede vini con QUALSIASI filtro geografico/tipo/prezzo/annata (es. "della Toscana", "italiani", "rossi", "sotto €50"), DEVI chiamare search_wines con i filtri estratti
 - NON usare get_inventory_list se ci sono filtri nella richiesta
-- Estrai filtri dal testo: "della Toscana" → {"region": "Toscana"}, "italiani" → {"country": "Italia"}, "rossi" → {"wine_type": "rosso"}
+- Estrai filtri dal testo: "della Toscana" → {{"region": "Toscana"}}, "italiani" → {{"country": "Italia"}}, "rossi" → {{"wine_type": "rosso"}}
 - Combina filtri quando presenti: "rossi italiani" → {"country": "Italia", "wine_type": "rosso"}
 
 FORMATO RISPOSTE PRE-STRUTTURATE:
@@ -867,6 +867,17 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
         except Exception as e:
             logger.error(f"Errore chiamata API OpenAI: {e}")
             logger.error(f"Tipo errore: {type(e).__name__}")
+            # Fallback: se la richiesta contiene filtri riconoscibili, esegui ricerca locale senza AI
+            try:
+                if telegram_id:
+                    derived = _parse_filters(prompt)
+                    if derived:
+                        wines = await async_db_manager.search_wines_filtered(telegram_id, derived, limit=50)
+                        if wines:
+                            return format_inventory_list(wines, limit=50)
+                        return format_search_no_results(derived)
+            except Exception as fe:
+                logger.error(f"Fallback ricerca filtrata fallito: {fe}")
             return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
         
         # Se l'AI ha scelto di chiamare un tool, gestiscilo qui (function calling)
@@ -926,7 +937,6 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 return format_wine_not_found(query)
 
             if name == "search_wines":
-                from .database_async import async_db_manager
                 filters = args.get("filters") or {}
                 limit = int(args.get("limit", 50))
                 
@@ -943,7 +953,6 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 return format_search_no_results(merged_filters)
 
             if name == "get_inventory_stats":
-                from .database_async import async_db_manager
                 stats = await async_db_manager.get_inventory_stats(telegram_id)
                 return format_inventory_summary(
                     telegram_id,
