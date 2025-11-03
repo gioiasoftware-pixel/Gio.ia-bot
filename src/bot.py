@@ -90,21 +90,21 @@ async def testprocessor_cmd(update, context):
         result = await processor_client.health_check()
         
         if result.get('status') == 'healthy':
-            await update.message.reply_text(
-                f"✅ **Processor connesso!**\n\n"
+                    await update.message.reply_text(
+                        f"✅ **Processor connesso!**\n\n"
                 f"URL: {processor_client.base_url}\n"
-                f"Status: {result.get('status', 'unknown')}\n"
+                        f"Status: {result.get('status', 'unknown')}\n"
                 f"Service: {result.get('service', 'unknown')}\n"
                 f"AI Enabled: {result.get('ai_enabled', 'unknown')}\n"
                 f"Database: {result.get('database_status', 'unknown')}"
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ **Processor non raggiungibile**\n\n"
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ **Processor non raggiungibile**\n\n"
                 f"URL: {processor_client.base_url}\n"
                 f"Status: {result.get('status', 'unknown')}\n"
                 f"Error: {result.get('error', 'Unknown error')}"
-            )
+                    )
     except Exception as e:
         await update.message.reply_text(
             f"❌ **Errore connessione processor**\n\n"
@@ -266,7 +266,7 @@ async def chat_handler(update, context):
             await async_db_manager.log_chat_message(telegram_id, 'user', user_text)
         except Exception:
             pass
-
+        
         # Gestisci movimenti inventario
         logger.info(f"[BOT] Calling process_movement_message for: {user_text[:50]}...")
         movement_handled = await inventory_movement_manager.process_movement_message(update, context)
@@ -331,48 +331,47 @@ async def chat_handler(update, context):
                     reply_clean = reply_clean.replace(edit_marker, "").strip()
                 reply_clean = reply_clean.rstrip()
                 
-                label_map = {
-                    "selling_price": "Prezzo vendita",
-                    "cost_price": "Prezzo acquisto",
-                    "alcohol_content": "Gradazione",
-                    "vintage": "Annata",
-                    "grape_variety": "Vitigno",
-                    "classification": "Classificazione",
-                    "description": "Descrizione",
-                    "notes": "Note",
-                    "producer": "Produttore",
-                }
+                # Estrai wine_id e fields da entrambi i marker
+                wine_id = None
+                fill_fields = []
+                edit_fields = []
                 
-                buttons = []
-                
-                # Bottoni per campi mancanti (FILL)
                 if fill_marker:
                     marker_inner = fill_marker.strip("[]")
                     parts = marker_inner.split(":", 2)
                     wine_id = int(parts[1]) if len(parts) > 1 else None
-                    fields = parts[2].split(",") if len(parts) > 2 else []
-                    fields = [f for f in fields if f][:6]
-                    for f in fields:
-                        buttons.append([InlineKeyboardButton(
-                            f"➕ {label_map.get(f, f)}",
-                            callback_data=f"fill:{wine_id}:{f}"
-                        )])
+                    fill_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
                 
-                # Bottoni per campi esistenti (EDIT)
                 if edit_marker:
                     marker_inner = edit_marker.strip("[]")
                     parts = marker_inner.split(":", 2)
-                    wine_id = int(parts[1]) if len(parts) > 1 else None
-                    fields = parts[2].split(",") if len(parts) > 2 else []
-                    fields = [f for f in fields if f][:6]
-                    for f in fields:
-                        buttons.append([InlineKeyboardButton(
-                            f"✏️ Modifica {label_map.get(f, f)}",
-                            callback_data=f"fill:{wine_id}:{f}"
-                        )])
+                    if wine_id is None:
+                        wine_id = int(parts[1]) if len(parts) > 1 else None
+                    edit_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
                 
-                if buttons:
-                    keyboard = InlineKeyboardMarkup(buttons)
+                # Salva dati nel context per callback successivi
+                if wine_id:
+                    context.user_data[f'wine_fields_{wine_id}'] = {
+                        'fill_fields': fill_fields,
+                        'edit_fields': edit_fields,
+                        'original_text': reply_clean  # Salva testo originale
+                    }
+                
+                # Mostra solo bottoni principali
+                main_buttons = []
+                if fill_fields:
+                    main_buttons.append([InlineKeyboardButton(
+                        "➕ Aggiungi dati",
+                        callback_data=f"show_fill:{wine_id}"
+                    )])
+                if edit_fields:
+                    main_buttons.append([InlineKeyboardButton(
+                        "📝 Modifica dati",
+                        callback_data=f"show_edit:{wine_id}"
+                    )])
+                
+                if main_buttons:
+                    keyboard = InlineKeyboardMarkup(main_buttons)
                     await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
                 else:
                     await update.message.reply_text(reply_clean, parse_mode='Markdown')
@@ -586,6 +585,89 @@ async def callback_handler(update, context):
     # if new_onboarding_manager.handle_callback_query(update, context):
     #     return
     
+    # Gestisci callback per mostrare bottoni sottomenu
+    label_map = {
+        "selling_price": "Prezzo vendita",
+        "cost_price": "Prezzo acquisto",
+        "alcohol_content": "Gradazione",
+        "vintage": "Annata",
+        "grape_variety": "Vitigno",
+        "classification": "Classificazione",
+        "description": "Descrizione",
+        "notes": "Note",
+        "producer": "Produttore",
+    }
+    
+    if query.data and query.data.startswith("show_fill:"):
+        try:
+            _, wine_id_str = query.data.split(":", 1)
+            wine_id = int(wine_id_str)
+            fields_data = context.user_data.get(f'wine_fields_{wine_id}', {})
+            fill_fields = fields_data.get('fill_fields', [])
+            
+            if fill_fields:
+                buttons = []
+                for f in fill_fields:
+                    buttons.append([InlineKeyboardButton(
+                        f"➕ {label_map.get(f, f)}",
+                        callback_data=f"fill:{wine_id}:{f}"
+                    )])
+                buttons.append([InlineKeyboardButton("◀️ Indietro", callback_data=f"back_main:{wine_id}")])
+                keyboard = InlineKeyboardMarkup(buttons)
+                await query.edit_message_text("➕ **Aggiungi dati**\n\nSeleziona il campo da compilare:", reply_markup=keyboard)
+            return
+        except Exception as e:
+            logger.error(f"Errore show_fill callback: {e}")
+    
+    if query.data and query.data.startswith("show_edit:"):
+        try:
+            _, wine_id_str = query.data.split(":", 1)
+            wine_id = int(wine_id_str)
+            fields_data = context.user_data.get(f'wine_fields_{wine_id}', {})
+            edit_fields = fields_data.get('edit_fields', [])
+            
+            if edit_fields:
+                buttons = []
+                for f in edit_fields:
+                    buttons.append([InlineKeyboardButton(
+                        f"✏️ Modifica {label_map.get(f, f)}",
+                        callback_data=f"fill:{wine_id}:{f}"
+                    )])
+                buttons.append([InlineKeyboardButton("◀️ Indietro", callback_data=f"back_main:{wine_id}")])
+                keyboard = InlineKeyboardMarkup(buttons)
+                await query.edit_message_text("📝 **Modifica dati**\n\nSeleziona il campo da modificare:", reply_markup=keyboard)
+            return
+        except Exception as e:
+            logger.error(f"Errore show_edit callback: {e}")
+    
+    if query.data and query.data.startswith("back_main:"):
+        try:
+            _, wine_id_str = query.data.split(":", 1)
+            wine_id = int(wine_id_str)
+            fields_data = context.user_data.get(f'wine_fields_{wine_id}', {})
+            fill_fields = fields_data.get('fill_fields', [])
+            edit_fields = fields_data.get('edit_fields', [])
+            original_text = fields_data.get('original_text', query.message.text)
+            
+            main_buttons = []
+            if fill_fields:
+                main_buttons.append([InlineKeyboardButton(
+                    "➕ Aggiungi dati",
+                    callback_data=f"show_fill:{wine_id}"
+                )])
+            if edit_fields:
+                main_buttons.append([InlineKeyboardButton(
+                    "📝 Modifica dati",
+                    callback_data=f"show_edit:{wine_id}"
+                )])
+            
+            if main_buttons:
+                keyboard = InlineKeyboardMarkup(main_buttons)
+                await query.edit_message_text(original_text, reply_markup=keyboard, parse_mode='Markdown')
+            return
+        except Exception as e:
+            logger.error(f"Errore back_main callback: {e}")
+    
     # Gestisci callback di compilazione campi vino
     if query.data and query.data.startswith("fill:"):
         try:
@@ -595,18 +677,8 @@ async def callback_handler(update, context):
                 'wine_id': wine_id,
                 'field': field
             }
-            field_label = {
-                "selling_price": "Prezzo vendita",
-                "cost_price": "Prezzo acquisto",
-                "alcohol_content": "Gradazione",
-                "vintage": "Annata",
-                "grape_variety": "Vitigno",
-                "classification": "Classificazione",
-                "description": "Descrizione",
-                "notes": "Note",
-                "producer": "Produttore",
-            }.get(field, field)
-            await query.edit_message_text(f"✏️ Inserisci il valore per: {field_label}")
+            field_label = label_map.get(field, field)
+            await query.edit_message_text(f"✏️ Inserisci il valore per: **{field_label}**", parse_mode='Markdown')
             return
         except Exception:
             pass
