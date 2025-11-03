@@ -477,6 +477,17 @@ INVENTARIO ATTUALE:
                             specific_wine_info = f"\n\nNESSUN VINO TROVATO nel database per '{wine_search_term}'\n"
                             # Anche se non trovato, passa all'AI per gestire il messaggio
                             # (AI dirà "non ho questa informazione" in modo più naturale)
+                    else:
+                        # Retry 1: ricerca ampia usando l'intero prompt come termine di ricerca
+                        try:
+                            broad_term = re.sub(r"[^\w\s'’]", " ", prompt.lower()).strip()
+                            if broad_term and len(broad_term) > 2:
+                                broad_found = await async_db_manager.search_wines(telegram_id, broad_term, limit=3)
+                                if broad_found and len(broad_found) == 1:
+                                    logger.info("[FORMATTED] Retry broad search matched exactly 1 wine → template info")
+                                    return format_wine_info(broad_found[0])
+                        except Exception as e:
+                            logger.warning(f"Broad search fallback failed: {e}")
                     
                     # Ottieni statistiche inventario (non tutti i vini)
                     wines = await async_db_manager.get_user_wines(telegram_id)  # ASYNC
@@ -579,6 +590,10 @@ Non ho trovato 'nome' nel tuo inventario.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMPRE il database usando i dati forniti nel contesto o cerca il vino specifico se necessario."""
+        
+        # Suggerimento forte per l'AI: se la richiesta corrisponde a uno dei casi (quantità, prezzo, info vino, elenco),
+        # usa il formato pre-strutturato corrispondente. Solo se non applicabile, rispondi in modo colloquiale
+        # ma sempre basandoti sui dati del database quando disponibili.
         
         logger.info(f"System prompt length: {len(system_prompt)}")
         logger.info(f"User prompt: {prompt[:100]}...")
