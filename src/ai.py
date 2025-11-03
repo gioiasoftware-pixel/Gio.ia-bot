@@ -319,11 +319,15 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
         r'prezzo di vendita (.+?)',
     ]
     
-    # Pattern per "info/dettagli/tutto su X"
+    # Pattern per "info/dettagli/tutto su X" (più generici per catturare anche "sul X")
     info_patterns = [
         r'dimmi (?:tutto|tutte|tutta) (?:su|del|dello|della|sul) (.+?)',
         r'(?:informazioni|dettagli|info) (?:su|del|dello|della|sul) (.+?)',
         r'cosa sai (?:su|del|dello|della|sul) (.+?)',
+        r'sul (.+?)(?:\?|$)',  # Pattern per "sul barolo cannubi"
+        r'su (.+?)(?:\?|$)',    # Pattern per "su barolo"
+        r'sul (.+)',             # Fallback senza fine frase
+        r'su (.+)',              # Fallback senza fine frase
     ]
     
     # Se non ci sono vini trovati, passa all'AI
@@ -357,6 +361,11 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
     for pattern in exists_patterns:
         if re.search(pattern, prompt_lower):
             return format_wine_exists(wine)
+    
+    # Fallback: se il prompt contiene "su" o "sul" e abbiamo un vino, usa sempre format_wine_info
+    if re.search(r'\b(su|sul)\b', prompt_lower) and wine:
+        logger.info(f"[FORMATTED] Fallback: usando format_wine_info per prompt '{prompt_lower[:50]}'")
+        return format_wine_info(wine)
     
     # Se nessun pattern match, passa all'AI
     return None
