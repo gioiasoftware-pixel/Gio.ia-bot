@@ -12,6 +12,10 @@ from .inventory_movements import inventory_movement_manager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Filtra i log httpx/httpcore: mostra solo ERROR
+for _lib in ("httpx", "httpcore"):
+    logging.getLogger(_lib).addFilter(lambda r: r.levelno >= logging.ERROR)
+
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
 
