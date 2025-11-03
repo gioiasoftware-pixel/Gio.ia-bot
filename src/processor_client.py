@@ -439,6 +439,30 @@ class ProcessorClient:
                 "error": str(e)
             }
 
+    async def update_wine_field(self, telegram_id: int, business_name: str,
+                                wine_id: int, field: str, value: str) -> Dict[str, Any]:
+        """
+        Aggiorna un singolo campo di un vino tramite processor.
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', business_name)
+                form.add_field('wine_id', str(wine_id))
+                form.add_field('field', field)
+                form.add_field('value', value)
+
+                async with session.post(f"{self.base_url}/update-wine-field", data=form) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        text = await response.text()
+                        return {"status": "error", "error": f"HTTP {response.status}: {text[:200]}"}
+        except Exception as e:
+            logger.error(f"Error updating wine field: {e}")
+            return {"status": "error", "error": str(e)}
+
 # Istanza globale del client
 processor_client = ProcessorClient()
 

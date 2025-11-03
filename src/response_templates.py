@@ -147,7 +147,36 @@ def format_wine_info(wine: Any) -> str:
         lines.append(f"💬 **Note:** {wine.notes}")
     
     lines.append("━" * 30)
-    return "\n".join(lines)
+
+    # Calcola campi mancanti per consentire inserimento rapido via bot
+    missing_fields = []
+    if not wine.producer:
+        missing_fields.append("producer")
+    if not wine.region and not wine.country:
+        # opzionale, non chiediamo sempre regione/paese
+        pass
+    if not wine.vintage:
+        missing_fields.append("vintage")
+    if not getattr(wine, 'grape_variety', None):
+        missing_fields.append("grape_variety")
+    if not getattr(wine, 'classification', None):
+        missing_fields.append("classification")
+    if getattr(wine, 'selling_price', None) is None:
+        missing_fields.append("selling_price")
+    if getattr(wine, 'cost_price', None) is None:
+        missing_fields.append("cost_price")
+    if getattr(wine, 'alcohol_content', None) is None:
+        missing_fields.append("alcohol_content")
+    if not getattr(wine, 'description', None):
+        missing_fields.append("description")
+    if not getattr(wine, 'notes', None):
+        missing_fields.append("notes")
+
+    text = "\n".join(lines)
+    if missing_fields and getattr(wine, 'id', None) is not None:
+        # Aggiungi marker nascosto per il bot: [[FILL_FIELDS:wine_id:field1,field2,...]]
+        text += f"\n\n[[FILL_FIELDS:{wine.id}:{','.join(missing_fields)}]]"
+    return text
 
 
 def format_wine_not_found(wine_search_term: str) -> str:

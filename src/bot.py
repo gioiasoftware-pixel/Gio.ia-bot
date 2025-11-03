@@ -8,6 +8,7 @@ from .new_onboarding import new_onboarding_manager
 from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -158,6 +159,40 @@ async def help_cmd(update, context):
 
 
 async def chat_handler(update, context):
+    # Gestione input per aggiornamento campo vino in sospeso
+    pending = context.user_data.get('pending_field_update')
+    if pending and update.message and update.message.text:
+        try:
+            from .processor_client import processor_client
+            user = update.effective_user
+            telegram_id = user.id
+            value_text = update.message.text.strip()
+            # Recupera business_name
+            from .database_async import async_db_manager
+            user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)
+            business_name = user_db.business_name if user_db else None
+            if not business_name:
+                await update.message.reply_text("⚠️ Nome locale non trovato. Completa l'onboarding con /start")
+                return
+            # Invia aggiornamento al processor
+            result = await processor_client.update_wine_field(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                wine_id=pending['wine_id'],
+                field=pending['field'],
+                value=value_text
+            )
+            if isinstance(result, dict) and result.get('status') == 'success':
+                await update.message.reply_text("✅ Aggiornamento salvato")
+            else:
+                err = (result or {}).get('error', 'Errore sconosciuto') if isinstance(result, dict) else str(result)
+                await update.message.reply_text(f"❌ Errore aggiornamento: {err[:200]}")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Errore aggiornamento: {str(e)[:200]}")
+        finally:
+            context.user_data.pop('pending_field_update', None)
+        return
+
     # Verifica se c'è una conferma schema delete in sospeso (PRIMA di altre operazioni)
     if await handle_schema_delete_confirmation(update, context):
         return
@@ -269,8 +304,39 @@ async def chat_handler(update, context):
                 logger.info(f"Movimento processato e risposta inviata a {username}")
                 return
         
-        # Risposta normale AI
-        await update.message.reply_text(reply)
+        # Risposta normale AI con eventuali bottoni per compilare campi mancanti
+        if reply and "[[FILL_FIELDS:" in reply:
+            try:
+                marker_start = reply.rfind("[[FILL_FIELDS:")
+                marker_text = reply[marker_start:].strip()
+                # Formato: [[FILL_FIELDS:wine_id:field1,field2,...]]
+                marker_inner = marker_text.strip("[]")
+                parts = marker_inner.split(":", 2)
+                wine_id = int(parts[1]) if len(parts) > 1 else None
+                fields = parts[2].split(",") if len(parts) > 2 else []
+                reply_clean = reply[:marker_start].rstrip()
+
+                fields = [f for f in fields if f]
+                fields = fields[:6]
+                label_map = {
+                    "selling_price": "Prezzo vendita",
+                    "cost_price": "Prezzo acquisto",
+                    "alcohol_content": "Gradazione",
+                    "vintage": "Annata",
+                    "grape_variety": "Vitigno",
+                    "classification": "Classificazione",
+                    "description": "Descrizione",
+                    "notes": "Note",
+                    "producer": "Produttore",
+                }
+                buttons = [[InlineKeyboardButton(f"✏️ {label_map.get(f, f)}", callback_data=f"fill:{wine_id}:{f}")]
+                           for f in fields]
+                keyboard = InlineKeyboardMarkup(buttons)
+                await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
+            except Exception:
+                await update.message.reply_text(reply, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(reply, parse_mode='Markdown')
         # Logga risposta assistant
         try:
             await async_db_manager.log_chat_message(telegram_id, 'assistant', reply)
@@ -476,6 +542,31 @@ async def callback_handler(update, context):
     # if new_onboarding_manager.handle_callback_query(update, context):
     #     return
     
+    # Gestisci callback di compilazione campi vino
+    if query.data and query.data.startswith("fill:"):
+        try:
+            _, wine_id_str, field = query.data.split(":", 2)
+            wine_id = int(wine_id_str)
+            context.user_data['pending_field_update'] = {
+                'wine_id': wine_id,
+                'field': field
+            }
+            field_label = {
+                "selling_price": "Prezzo vendita",
+                "cost_price": "Prezzo acquisto",
+                "alcohol_content": "Gradazione",
+                "vintage": "Annata",
+                "grape_variety": "Vitigno",
+                "classification": "Classificazione",
+                "description": "Descrizione",
+                "notes": "Note",
+                "producer": "Produttore",
+            }.get(field, field)
+            await query.edit_message_text(f"✏️ Inserisci il valore per: {field_label}")
+            return
+        except Exception:
+            pass
+
     # Gestisci callback inventario - ASYNC
     if await inventory_manager.handle_wine_callback(update, context):
         return
