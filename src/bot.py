@@ -120,12 +120,83 @@ async def deletewebhook_cmd(update, context):
         await update.message.reply_text(f"❌ Errore rimozione webhook: {e}")
 
 
+async def view_cmd(update, context):
+    """Comando per generare link viewer con token JWT"""
+    try:
+        from .viewer_utils import generate_viewer_token, get_viewer_url
+        from .database_async import async_db_manager
+        
+        user = update.effective_user
+        telegram_id = user.id
+        
+        # Verifica che utente esista e abbia onboarding completato
+        user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        
+        if not user_db:
+            await update.message.reply_text(
+                "⚠️ **Utente non trovato**\n\n"
+                "Completa prima l'onboarding con `/start`."
+            )
+            return
+        
+        if not user_db.business_name or user_db.business_name == "Upload Manuale":
+            await update.message.reply_text(
+                "⚠️ **Nome locale non configurato**\n\n"
+                "Completa prima l'onboarding con `/start`."
+            )
+            return
+        
+        # Verifica che abbia inventario
+        user_wines = await async_db_manager.get_user_wines(telegram_id)
+        if not user_wines or len(user_wines) == 0:
+            await update.message.reply_text(
+                "⚠️ **Inventario vuoto**\n\n"
+                "Carica prima il tuo inventario con `/upload`."
+            )
+            return
+        
+        # Genera token JWT
+        token = generate_viewer_token(telegram_id, user_db.business_name)
+        
+        if not token:
+            await update.message.reply_text(
+                "❌ **Errore generazione link**\n\n"
+                "Riprova più tardi o contatta il supporto."
+            )
+            return
+        
+        # Genera URL viewer
+        viewer_link = get_viewer_url(token)
+        
+        # Messaggio con link
+        message = (
+            f"🌐 **Link Visualizzazione Inventario**\n\n"
+            f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+            f"🔗 {viewer_link}\n\n"
+            f"⏰ **Validità:** 1 ora\n"
+            f"💡 Se il link scade, usa `/view` per generarne uno nuovo.\n\n"
+            f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
+        )
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+        logger.info(f"Link viewer generato per {telegram_id}/{user_db.business_name}")
+        
+    except Exception as e:
+        logger.error(f"Errore comando /view: {e}")
+        await update.message.reply_text(
+            "❌ **Errore generazione link**\n\n"
+            "Riprova più tardi."
+        )
+
+
 async def help_cmd(update, context):
     help_text = (
         "🤖 **Gio.ia-bot - Comandi disponibili:**\n\n"
         "📋 **Comandi base:**\n"
         "• `/start` - Avvia il bot o mostra il profilo\n"
         "• `/help` - Mostra questo messaggio di aiuto\n"
+        "• `/view` - Genera link per visualizzare inventario completo\n"
         "• `/aggiungi` - Aggiungi un nuovo vino\n"
         "• `/upload` - Carica inventario da file/foto\n"
         "• `/scorte` - Mostra vini con scorte basse\n"
@@ -890,6 +961,7 @@ def main():
     # Comandi base
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("view", view_cmd))
     app.add_handler(CommandHandler("testai", testai_cmd))
     app.add_handler(CommandHandler("testprocessor", testprocessor_cmd))
     app.add_handler(CommandHandler("deletewebhook", deletewebhook_cmd))
