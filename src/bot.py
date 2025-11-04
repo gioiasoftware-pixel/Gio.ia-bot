@@ -458,19 +458,6 @@ async def view_cmd(update, context):
         # Pulisci cache in caso di errore
         async with _viewer_pending_lock:
             _viewer_pending_requests.pop(telegram_id, None)
-        
-    except Exception as e:
-        log_with_context(
-            "error",
-            f"[VIEW] Errore comando /view: {e}, correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id,
-            exc_info=True
-        )
-        await update.message.reply_text(
-            "❌ **Errore generazione link**\n\n"
-            "Riprova più tardi."
-        )
 
 
 async def help_cmd(update, context):
