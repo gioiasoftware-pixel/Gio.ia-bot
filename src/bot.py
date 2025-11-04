@@ -1291,37 +1291,9 @@ async def viewer_link_ready_handler(request):
                     telegram_id=telegram_id,
                     correlation_id=correlation_id
                 )
-                    f"💡 Se il link scade, usa `/view` per generarne uno nuovo."
-                )
-                
-                await bot_instance.send_message(
-                    chat_id=telegram_id,
-                    text=message,
-                    parse_mode='Markdown'
-                )
-                
-                log_with_context(
-                    "info",
-                    f"[VIEWER_CALLBACK] Messaggio inviato direttamente a telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id
-                )
-                
-            except Exception as send_error:
-                log_with_context(
-                    "error",
-                    f"[VIEWER_CALLBACK] Errore invio messaggio diretto: {send_error}, "
-                    f"telegram_id={telegram_id}, correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id,
-                    exc_info=True
-                )
-            # Non fallire completamente, ritorna successo comunque
-            # Il viewer ha fatto il suo lavoro
         
         return web.Response(
-            json={"status": "success", "message": "Link inviato all'utente"},
+            json={"status": "success", "message": "Link ricevuto e processato"},
             status=200
         )
         
