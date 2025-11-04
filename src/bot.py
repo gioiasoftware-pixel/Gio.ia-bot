@@ -122,24 +122,66 @@ async def deletewebhook_cmd(update, context):
 
 async def view_cmd(update, context):
     """Comando per generare link viewer con token JWT"""
+    from .structured_logging import log_with_context, set_request_context, get_correlation_id
+    import uuid
+    
+    user = update.effective_user
+    telegram_id = user.id
+    username = user.username or user.first_name or "Utente"
+    
+    # Setup correlation_id per logging strutturato
+    correlation_id = str(uuid.uuid4())
+    set_request_context(telegram_id, correlation_id)
+    
+    log_with_context(
+        "info",
+        f"[VIEW] Comando /view ricevuto da {username} (ID: {telegram_id})",
+        telegram_id=telegram_id,
+        correlation_id=correlation_id
+    )
+    
     try:
         from .viewer_utils import generate_viewer_token, get_viewer_url
         from .database_async import async_db_manager
         
-        user = update.effective_user
-        telegram_id = user.id
+        log_with_context(
+            "info",
+            f"[VIEW] Verifica utente e inventario per telegram_id={telegram_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
         
         # Verifica che utente esista e abbia onboarding completato
         user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)
         
         if not user_db:
+            log_with_context(
+                "warning",
+                f"[VIEW] Utente non trovato per telegram_id={telegram_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             await update.message.reply_text(
                 "⚠️ **Utente non trovato**\n\n"
                 "Completa prima l'onboarding con `/start`."
             )
             return
         
+        log_with_context(
+            "info",
+            f"[VIEW] Utente trovato: business_name={user_db.business_name}, "
+            f"onboarding_completed={user_db.onboarding_completed}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
         if not user_db.business_name or user_db.business_name == "Upload Manuale":
+            log_with_context(
+                "warning",
+                f"[VIEW] Business name non configurato per telegram_id={telegram_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             await update.message.reply_text(
                 "⚠️ **Nome locale non configurato**\n\n"
                 "Completa prima l'onboarding con `/start`."
@@ -147,8 +189,30 @@ async def view_cmd(update, context):
             return
         
         # Verifica che abbia inventario
+        log_with_context(
+            "info",
+            f"[VIEW] Recupero inventario per telegram_id={telegram_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
         user_wines = await async_db_manager.get_user_wines(telegram_id)
+        
+        log_with_context(
+            "info",
+            f"[VIEW] Recuperati {len(user_wines) if user_wines else 0} vini da tabella dinamica per "
+            f"{telegram_id}/{user_db.business_name}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
         if not user_wines or len(user_wines) == 0:
+            log_with_context(
+                "warning",
+                f"[VIEW] Inventario vuoto per telegram_id={telegram_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             await update.message.reply_text(
                 "⚠️ **Inventario vuoto**\n\n"
                 "Carica prima il tuo inventario con `/upload`."
@@ -156,17 +220,47 @@ async def view_cmd(update, context):
             return
         
         # Genera token JWT
-        token = generate_viewer_token(telegram_id, user_db.business_name)
+        log_with_context(
+            "info",
+            f"[VIEW] Generazione token JWT per telegram_id={telegram_id}, "
+            f"business_name={user_db.business_name}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        token = generate_viewer_token(telegram_id, user_db.business_name, correlation_id)
         
         if not token:
+            log_with_context(
+                "error",
+                f"[VIEW] Errore generazione token JWT per telegram_id={telegram_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
             await update.message.reply_text(
                 "❌ **Errore generazione link**\n\n"
                 "Riprova più tardi o contatta il supporto."
             )
             return
         
+        log_with_context(
+            "info",
+            f"[VIEW] Token JWT generato con successo per {telegram_id}/{user_db.business_name}, "
+            f"scadenza: 1h",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
         # Genera URL viewer
-        viewer_link = get_viewer_url(token)
+        viewer_link = get_viewer_url(token, correlation_id)
+        
+        log_with_context(
+            "info",
+            f"[VIEW] URL viewer generato: {viewer_link[:100]}... (troncato), "
+            f"correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
         
         # Messaggio con link
         message = (
@@ -180,10 +274,22 @@ async def view_cmd(update, context):
         
         await update.message.reply_text(message, parse_mode='Markdown')
         
-        logger.info(f"Link viewer generato per {telegram_id}/{user_db.business_name}")
+        log_with_context(
+            "info",
+            f"[VIEW] Link viewer generato e inviato con successo per {telegram_id}/{user_db.business_name}, "
+            f"vini_count={len(user_wines)}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
         
     except Exception as e:
-        logger.error(f"Errore comando /view: {e}")
+        log_with_context(
+            "error",
+            f"[VIEW] Errore comando /view: {e}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id,
+            exc_info=True
+        )
         await update.message.reply_text(
             "❌ **Errore generazione link**\n\n"
             "Riprova più tardi."
