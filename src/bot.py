@@ -1241,16 +1241,21 @@ def _start_health_server(port: int) -> None:
             from urllib.parse import urlparse
             
             parsed_path = urlparse(self.path)
+            logger.info(f"[HEALTH_SERVER] Richiesta POST ricevuta: path={parsed_path.path}")
+            
             if parsed_path.path == "/api/viewer/link-ready":
                 try:
+                    logger.info(f"[HEALTH_SERVER] Processing /api/viewer/link-ready")
                     # Leggi body JSON
                     content_length = int(self.headers.get('Content-Length', 0))
                     if content_length == 0:
+                        logger.warning(f"[HEALTH_SERVER] Body vuoto per /api/viewer/link-ready")
                         self.send_error(400, "Body vuoto")
                         return
                     
                     body = self.rfile.read(content_length)
                     data = json.loads(body.decode('utf-8'))
+                    logger.info(f"[HEALTH_SERVER] Body ricevuto: {json.dumps(data)[:200]}")
                     
                     # Esegui handler asincrono direttamente
                     loop = asyncio.new_event_loop()
@@ -1266,7 +1271,9 @@ def _start_health_server(port: int) -> None:
                         mock_request = MockRequest(data)
                         
                         # Chiama handler
+                        logger.info(f"[HEALTH_SERVER] Chiamando viewer_link_ready_handler")
                         result = loop.run_until_complete(viewer_link_ready_handler(mock_request))
+                        logger.info(f"[HEALTH_SERVER] Handler completato, result type: {type(result)}")
                         
                         # Estrai risposta
                         if isinstance(result, web.Response):
