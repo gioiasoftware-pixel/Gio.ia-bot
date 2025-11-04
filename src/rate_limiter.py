@@ -35,11 +35,29 @@ async def check_rate_limit(
             
             # Crea tabella se non esiste (auto-migration)
             try:
-                # Prima verifica se la tabella esiste
+                # Prima verifica se esiste una VIEW con questo nome (deve essere droppata)
+                check_view_query = sql_text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.views 
+                        WHERE table_name = 'rate_limit_logs'
+                    )
+                """)
+                result = await session.execute(check_view_query)
+                view_exists = result.scalar()
+                
+                if view_exists:
+                    # Se esiste una view, droppala
+                    drop_view_query = sql_text("DROP VIEW IF EXISTS rate_limit_logs CASCADE")
+                    await session.execute(drop_view_query)
+                    await session.commit()
+                    logger.info("[RATE_LIMIT] View rate_limit_logs droppata, creando tabella")
+                
+                # Verifica se la tabella esiste
                 check_table_query = sql_text("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables 
                         WHERE table_name = 'rate_limit_logs'
+                        AND table_type = 'BASE TABLE'
                     )
                 """)
                 result = await session.execute(check_table_query)
@@ -51,7 +69,7 @@ async def check_rate_limit(
                         CREATE TABLE rate_limit_logs (
                             id SERIAL PRIMARY KEY,
                             telegram_id BIGINT NOT NULL,
-                            action_type TEXT NOT NULL,
+                            action_type TEXT NOT NULL DEFAULT 'message',
                             created_at TIMESTAMP DEFAULT NOW()
                         )
                     """)
@@ -64,6 +82,7 @@ async def check_rate_limit(
                     """)
                     await session.execute(create_index_query)
                     await session.commit()
+                    logger.info("[RATE_LIMIT] Tabella rate_limit_logs creata con successo")
                 else:
                     # Verifica se la colonna action_type esiste
                     check_column_query = sql_text("""
@@ -84,6 +103,7 @@ async def check_rate_limit(
                         """)
                         await session.execute(alter_table_query)
                         await session.commit()
+                        logger.info("[RATE_LIMIT] Colonna action_type aggiunta a rate_limit_logs")
             except Exception as create_error:
                 # Se fallisce, passa (fail open)
                 logger.warning(f"[RATE_LIMIT] Impossibile creare/aggiornare tabella: {create_error}")
