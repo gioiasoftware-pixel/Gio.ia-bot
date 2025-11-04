@@ -344,10 +344,13 @@ class ProcessorClient:
         Chiamato durante l'onboarding.
         """
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            # Timeout aumentato a 30 secondi per operazioni database lunghe
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30, connect=10)) as session:
                 form = aiohttp.FormData()
                 form.add_field('telegram_id', str(telegram_id))
                 form.add_field('business_name', business_name)
+                
+                logger.info(f"Creating tables for {telegram_id}/{business_name} via processor")
                 
                 async with session.post(f"{self.base_url}/create-tables", data=form) as response:
                     if response.status == 200:
@@ -361,11 +364,23 @@ class ProcessorClient:
                             "status": "error",
                             "error": f"HTTP {response.status}: {error_text[:200]}"
                         }
-        except Exception as e:
-            logger.error(f"Error creating tables: {e}")
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout creating tables for {telegram_id}/{business_name}")
             return {
                 "status": "error",
-                "error": str(e)
+                "error": "Timeout: il processor non ha risposto entro 30 secondi. Riprova più tardi."
+            }
+        except aiohttp.ClientError as e:
+            logger.error(f"Client error creating tables: {e}")
+            return {
+                "status": "error",
+                "error": f"Errore di connessione: {str(e)[:200]}"
+            }
+        except Exception as e:
+            logger.error(f"Error creating tables: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e)[:200]
             }
     
     async def delete_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
