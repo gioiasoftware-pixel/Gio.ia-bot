@@ -141,7 +141,6 @@ async def view_cmd(update, context):
     )
     
     try:
-        from .viewer_utils import generate_viewer_token, get_viewer_url
         from .database_async import async_db_manager
         
         log_with_context(
@@ -219,40 +218,52 @@ async def view_cmd(update, context):
             )
             return
         
-        # Genera token JWT
+        # Chiama processor per generare viewer HTML
         log_with_context(
             "info",
-            f"[VIEW] Generazione token JWT per telegram_id={telegram_id}, "
+            f"[VIEW] Chiamata processor per generazione viewer per telegram_id={telegram_id}, "
             f"business_name={user_db.business_name}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
         
-        token = generate_viewer_token(telegram_id, user_db.business_name, correlation_id)
+        from .processor_client import ProcessorClient
+        processor_client = ProcessorClient()
         
-        if not token:
+        try:
+            result = await processor_client.generate_viewer(
+                telegram_id, 
+                user_db.business_name, 
+                correlation_id
+            )
+            
+            viewer_link = result.get("viewer_url")
+            
+            if not viewer_link:
+                raise Exception("Processor non ha restituito viewer_url")
+            
             log_with_context(
-                "error",
-                f"[VIEW] Errore generazione token JWT per telegram_id={telegram_id}",
+                "info",
+                f"[VIEW] Viewer generato con successo: view_id={result.get('view_id')}, "
+                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
                 telegram_id=telegram_id,
                 correlation_id=correlation_id
+            )
+            
+        except Exception as e:
+            log_with_context(
+                "error",
+                f"[VIEW] Errore chiamata processor per viewer: {e}, telegram_id={telegram_id}, "
+                f"correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id,
+                exc_info=True
             )
             await update.message.reply_text(
                 "❌ **Errore generazione link**\n\n"
                 "Riprova più tardi o contatta il supporto."
             )
             return
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Token JWT generato con successo per {telegram_id}/{user_db.business_name}, "
-            f"scadenza: 1h",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Genera URL viewer
-        viewer_link = get_viewer_url(token, correlation_id)
         
         log_with_context(
             "info",
@@ -267,7 +278,7 @@ async def view_cmd(update, context):
             f"🌐 **Link Visualizzazione Inventario**\n\n"
             f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
             f"🔗 {viewer_link}\n\n"
-            f"⏰ **Validità:** 1 ora\n"
+            f"⏰ **Validità:** 1 ora (link temporaneo)\n"
             f"💡 Se il link scade, usa `/view` per generarne uno nuovo.\n\n"
             f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
         )

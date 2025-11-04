@@ -16,6 +16,51 @@ class ProcessorClient:
         self.base_url = PROCESSOR_URL
         self.timeout = aiohttp.ClientTimeout(total=120)  # 2 minuti per elaborazione file
     
+    async def generate_viewer(self, telegram_id: int, business_name: str, correlation_id: str = None) -> Dict[str, Any]:
+        """
+        Genera HTML viewer con dati inventario embedded.
+        Ritorna view_id e viewer_url.
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', business_name)
+                if correlation_id:
+                    form.add_field('correlation_id', correlation_id)
+                
+                logger.info(
+                    f"[PROCESSOR_CLIENT] Richiesta generazione viewer per telegram_id={telegram_id}, "
+                    f"business_name={business_name}, correlation_id={correlation_id}"
+                )
+                
+                async with session.post(
+                    f"{self.base_url}/api/viewer/generate",
+                    data=form,
+                    timeout=aiohttp.ClientTimeout(total=60)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(
+                            f"[PROCESSOR_CLIENT] Viewer generato con successo: view_id={result.get('view_id')}, "
+                            f"telegram_id={telegram_id}, correlation_id={correlation_id}"
+                        )
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            f"[PROCESSOR_CLIENT] Errore generazione viewer: HTTP {response.status}, "
+                            f"telegram_id={telegram_id}, correlation_id={correlation_id}, error={error_text[:200]}"
+                        )
+                        raise Exception(f"Processor error: HTTP {response.status} - {error_text[:200]}")
+        except Exception as e:
+            logger.error(
+                f"[PROCESSOR_CLIENT] Errore chiamata processor per viewer: {e}, "
+                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                exc_info=True
+            )
+            raise
+    
     async def health_check(self) -> Dict[str, Any]:
         """Verifica stato del processor"""
         try:
