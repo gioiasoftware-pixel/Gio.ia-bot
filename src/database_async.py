@@ -569,10 +569,40 @@ class AsyncDatabaseManager:
                 return None
     
     async def get_low_stock_wines(self, telegram_id: int) -> List[Wine]:
-        """Ottieni vini con scorta bassa"""
+        """Ottieni vini con scorta bassa (quantity <= min_quantity)"""
         async with await get_async_session() as session:
             user = await self.get_user_by_telegram_id(telegram_id)
             if not user or not user.business_name:
+                return []
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                      AND (quantity IS NULL OR quantity <= COALESCE(min_quantity, 0))
+                    ORDER BY name
+                """)
+                
+                result = await session.execute(query, {"user_id": user.id})
+                rows = result.fetchall()
+                
+                # Converti le righe in oggetti Wine
+                wines = []
+                for row in rows:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    wines.append(wine)
+                
+                return wines
+            except Exception as e:
+                logger.error(f"Errore recuperando low stock wines da {table_name}: {e}")
                 return []
 
     async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
@@ -787,48 +817,6 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
         except Exception as e:
             logger.error(f"Errore riepilogo movimenti da tabella {table_name}: {e}")
             return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
-
-
-                    "vintage": wine_data.get('vintage'),
-                    "grape_variety": wine_data.get('grape_variety'),
-                    "region": wine_data.get('region'),
-                    "country": wine_data.get('country'),
-                    "wine_type": wine_data.get('wine_type'),
-                    "classification": wine_data.get('classification'),
-                    "quantity": wine_data.get('quantity', 0),
-                    "min_quantity": wine_data.get('min_quantity', 0),
-                    "cost_price": wine_data.get('cost_price'),
-                    "selling_price": wine_data.get('selling_price'),
-                    "alcohol_content": wine_data.get('alcohol_content'),
-                    "description": wine_data.get('description'),
-                    "notes": wine_data.get('notes')
-                })
-                
-                await session.commit()
-                row = result.fetchone()
-                
-                if row:
-                    wine = Wine()
-                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
-                               'region', 'country', 'wine_type', 'classification', 'quantity',
-                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
-                               'description', 'notes', 'created_at', 'updated_at']:
-                        if hasattr(row, key):
-                            setattr(wine, key, getattr(row, key))
-                    logger.info(f"Vino aggiunto: {wine.name} per utente {telegram_id}")
-                    return wine
-                return None
-            except Exception as e:
-                logger.error(f"Errore aggiungendo vino: {e}")
-                await session.rollback()
-                return None
-    
-    async def get_low_stock_wines(self, telegram_id: int) -> List[Wine]:
-        """Ottieni vini con scorta bassa"""
-        async with await get_async_session() as session:
-            user = await self.get_user_by_telegram_id(telegram_id)
-            if not user or not user.business_name:
-                return []
 
     async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
         """
