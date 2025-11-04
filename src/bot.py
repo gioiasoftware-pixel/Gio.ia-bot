@@ -1112,17 +1112,24 @@ async def viewer_link_ready_handler(request):
     from .structured_logging import log_with_context
     
     try:
-        # Per aiohttp, request.json() è una coroutine
-        if hasattr(request, 'json') and callable(getattr(request, 'json', None)):
-            # Verifica se è coroutine
-            import inspect
-            if inspect.iscoroutinefunction(request.json):
-                data = await request.json()
+        # Prova a chiamare request.json() - può essere sync o async
+        try:
+            if callable(getattr(request, 'json', None)):
+                json_method = request.json
+                import inspect
+                if inspect.iscoroutinefunction(json_method):
+                    data = await json_method()
+                else:
+                    data = json_method()
             else:
-                data = request.json()
-        else:
-            # Fallback per mock request
-            data = getattr(request, '_json_data', {})
+                # Fallback per mock request
+                data = getattr(request, '_json_data', {})
+        except Exception as json_error:
+            logger.error(f"[VIEWER_CALLBACK] Errore parsing JSON: {json_error}", exc_info=True)
+            return web.Response(
+                json={"status": "error", "message": f"Errore parsing JSON: {str(json_error)}"},
+                status=400
+            )
         
         telegram_id = data.get('telegram_id')
         viewer_url = data.get('viewer_url')
@@ -1261,18 +1268,18 @@ def _start_health_server(port: int) -> None:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
-                        # Crea mock request per viewer_link_ready_handler
-                        class MockRequest:
+                        # Chiama handler direttamente con i dati (non serve mock request)
+                        logger.info(f"[HEALTH_SERVER] Chiamando viewer_link_ready_handler con data: {json.dumps(data)[:200]}")
+                        
+                        # Crea un oggetto semplice che simula request.json()
+                        class SimpleRequest:
                             def __init__(self, json_data):
                                 self._json_data = json_data
                             async def json(self):
                                 return self._json_data
                         
-                        mock_request = MockRequest(data)
-                        
-                        # Chiama handler
-                        logger.info(f"[HEALTH_SERVER] Chiamando viewer_link_ready_handler")
-                        result = loop.run_until_complete(viewer_link_ready_handler(mock_request))
+                        simple_request = SimpleRequest(data)
+                        result = loop.run_until_complete(viewer_link_ready_handler(simple_request))
                         logger.info(f"[HEALTH_SERVER] Handler completato, result type: {type(result)}")
                         
                         # Estrai risposta
