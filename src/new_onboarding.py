@@ -296,6 +296,28 @@ class NewOnboardingManager:
                     f"📋 Ora ho bisogno del tuo inventario iniziale per creare il backup del giorno 0.\n\n"
                     f"📤 **Carica il file del tuo inventario** (CSV, Excel o foto) e iniziamo!"
                 )
+                
+                # Notifica admin che l'onboarding è stato completato (tabelle create)
+                try:
+                    from .admin_notifications import enqueue_admin_notification
+                    from .structured_logging import get_correlation_id
+                    
+                    user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                    
+                    await enqueue_admin_notification(
+                        event_type="onboarding_completed",
+                        telegram_id=telegram_id,
+                        payload={
+                            "business_name": business_name_from_db,
+                            "user_name": user.username or user.first_name or "N/A" if user else "N/A",
+                            "stage": "tables_created",
+                            "message": f"Onboarding completato: tabelle create per {business_name_from_db}. In attesa di inventario.",
+                            "inventory_pending": True
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+                except Exception as notif_error:
+                    logger.warning(f"Errore invio notifica admin onboarding: {notif_error}")
             else:
                 error_msg = result.get('error', 'Errore sconosciuto')
                 await update.message.reply_text(
