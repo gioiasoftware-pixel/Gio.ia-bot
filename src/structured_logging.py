@@ -88,3 +88,5 @@ def log_with_context(
     log_func = getattr(logger, level.lower(), logger.info)
     log_func(log_message, **extra)
 
+
+

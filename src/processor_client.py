@@ -279,3 +279,5 @@ class ProcessorClient:
 # Istanza globale
 processor_client = ProcessorClient()
 
+
+
