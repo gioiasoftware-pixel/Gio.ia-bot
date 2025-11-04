@@ -303,6 +303,31 @@ class NewOnboardingManager:
                     f"Dettagli: {error_msg[:200]}...\n\n"
                     f"Riprova o contatta il supporto."
                 )
+                
+                # Notifica admin per errore creazione tabelle
+                try:
+                    from .admin_notifications import enqueue_admin_notification
+                    from .structured_logging import get_correlation_id
+                    
+                    user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                    
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "business_name": business_name_from_db,
+                            "error_type": "table_creation_error",
+                            "error_message": error_msg,
+                            "error_code": "CREATE_TABLES_ERROR",
+                            "component": "telegram-ai-bot",
+                            "user_name": user.username or user.first_name or "N/A" if user else "N/A",
+                            "user_visible_error": f"⚠️ Errore configurazione database: {error_msg[:200]}"
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+                except Exception as notif_error:
+                    logger.warning(f"Errore invio notifica admin: {notif_error}")
+                
                 return
         except Exception as e:
             logger.error(f"Error creating tables: {e}")
@@ -310,6 +335,31 @@ class NewOnboardingManager:
                 f"⚠️ **Errore configurazione database**\n\n"
                 f"Riprova più tardi o contatta il supporto."
             )
+            
+            # Notifica admin per eccezione creazione tabelle
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                
+                await enqueue_admin_notification(
+                    event_type="error",
+                    telegram_id=telegram_id,
+                    payload={
+                        "business_name": business_name_from_db,
+                        "error_type": "table_creation_exception",
+                        "error_message": str(e),
+                        "error_code": "CREATE_TABLES_EXCEPTION",
+                        "component": "telegram-ai-bot",
+                        "user_name": user.username or user.first_name or "N/A" if user else "N/A",
+                        "user_visible_error": "⚠️ Errore configurazione database"
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return
         
         # Imposta stato per ricevere file
