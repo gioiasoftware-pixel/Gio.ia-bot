@@ -9,13 +9,11 @@ from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from .logging_config import setup_colored_logging
 
-logging.basicConfig(level=logging.INFO)
+# Configurazione logging colorato
+setup_colored_logging("telegram-bot")
 logger = logging.getLogger(__name__)
-
-# Filtra i log httpx/httpcore: mostra solo ERROR
-for _lib in ("httpx", "httpcore"):
-    logging.getLogger(_lib).addFilter(lambda r: r.levelno >= logging.ERROR)
 
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
