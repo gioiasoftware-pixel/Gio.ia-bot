@@ -788,3 +788,258 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             logger.error(f"Errore riepilogo movimenti da tabella {table_name}: {e}")
             return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
 
+
+                    "vintage": wine_data.get('vintage'),
+                    "grape_variety": wine_data.get('grape_variety'),
+                    "region": wine_data.get('region'),
+                    "country": wine_data.get('country'),
+                    "wine_type": wine_data.get('wine_type'),
+                    "classification": wine_data.get('classification'),
+                    "quantity": wine_data.get('quantity', 0),
+                    "min_quantity": wine_data.get('min_quantity', 0),
+                    "cost_price": wine_data.get('cost_price'),
+                    "selling_price": wine_data.get('selling_price'),
+                    "alcohol_content": wine_data.get('alcohol_content'),
+                    "description": wine_data.get('description'),
+                    "notes": wine_data.get('notes')
+                })
+                
+                await session.commit()
+                row = result.fetchone()
+                
+                if row:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    logger.info(f"Vino aggiunto: {wine.name} per utente {telegram_id}")
+                    return wine
+                return None
+            except Exception as e:
+                logger.error(f"Errore aggiungendo vino: {e}")
+                await session.rollback()
+                return None
+    
+    async def get_low_stock_wines(self, telegram_id: int) -> List[Wine]:
+        """Ottieni vini con scorta bassa"""
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+
+    async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
+        """
+        Ricerca con filtri multipli. Filtri supportati: region, country, producer, wine_type, classification,
+        name_contains, vintage_min, vintage_max, price_min, price_max, quantity_min, quantity_max.
+        """
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return []
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            clauses = ["user_id = :user_id"]
+            params = {"user_id": user.id, "limit": limit, "offset": offset}
+
+            def add_ilike(field, value):
+                if value:
+                    clauses.append(f"{field} ILIKE :{field}")
+                    params[field] = f"%{value}%"
+
+            add_ilike("region", filters.get("region"))
+            add_ilike("country", filters.get("country"))
+            add_ilike("producer", filters.get("producer"))
+            add_ilike("wine_type", filters.get("wine_type"))
+            add_ilike("classification", filters.get("classification"))
+            if filters.get("name_contains"):
+                clauses.append("name ILIKE :name_contains")
+                params["name_contains"] = f"%{filters['name_contains']}%"
+
+            # Range numerici
+            if filters.get("vintage_min") is not None:
+                clauses.append("vintage >= :vintage_min")
+                params["vintage_min"] = int(filters["vintage_min"])
+            if filters.get("vintage_max") is not None:
+                clauses.append("vintage <= :vintage_max")
+                params["vintage_max"] = int(filters["vintage_max"])
+            if filters.get("price_min") is not None:
+                clauses.append("selling_price >= :price_min")
+                params["price_min"] = float(filters["price_min"])
+            if filters.get("price_max") is not None:
+                clauses.append("selling_price <= :price_max")
+                params["price_max"] = float(filters["price_max"])
+            if filters.get("quantity_min") is not None:
+                clauses.append("quantity >= :quantity_min")
+                params["quantity_min"] = int(filters["quantity_min"])
+            if filters.get("quantity_max") is not None:
+                clauses.append("quantity <= :quantity_max")
+                params["quantity_max"] = int(filters["quantity_max"])
+
+            where_sql = " AND ".join(clauses)
+            query = sql_text(f"""
+                SELECT * FROM {table_name}
+                WHERE {where_sql}
+                ORDER BY name ASC
+                LIMIT :limit OFFSET :offset
+            """)
+            try:
+                result = await session.execute(query, params)
+                rows = result.fetchall()
+                wines = []
+                for row in rows:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    wines.append(wine)
+                return wines
+            except Exception as e:
+                logger.error(f"Errore search_wines_filtered su {table_name}: {e}")
+                return []
+
+    async def get_inventory_stats(self, telegram_id: int) -> Dict[str, Any]:
+        """
+        Statistiche inventario: totale vini, totale bottiglie, min/max/avg prezzo, low stock.
+        """
+        async with await get_async_session() as session:
+            user = await self.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                return {"total_wines": 0, "total_bottles": 0, "avg_price": None, "min_price": None, "max_price": None, "low_stock": 0}
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            try:
+                stats_q = sql_text(f"""
+                    SELECT 
+                      COUNT(*) AS total_wines,
+                      COALESCE(SUM(COALESCE(quantity,0)),0) AS total_bottles,
+                      AVG(selling_price) AS avg_price,
+                      MIN(selling_price) AS min_price,
+                      MAX(selling_price) AS max_price,
+                      SUM(CASE WHEN COALESCE(quantity,0) <= COALESCE(min_quantity,0) THEN 1 ELSE 0 END) AS low_stock
+                    FROM {table_name}
+                    WHERE user_id = :user_id
+                """)
+                res = await session.execute(stats_q, {"user_id": user.id})
+                row = res.fetchone()
+                return {
+                    "total_wines": int(row.total_wines) if row and hasattr(row,'total_wines') else 0,
+                    "total_bottles": int(row.total_bottles) if row and hasattr(row,'total_bottles') else 0,
+                    "avg_price": float(row.avg_price) if row and getattr(row,'avg_price', None) is not None else None,
+                    "min_price": float(row.min_price) if row and getattr(row,'min_price', None) is not None else None,
+                    "max_price": float(row.max_price) if row and getattr(row,'max_price', None) is not None else None,
+                    "low_stock": int(row.low_stock) if row and hasattr(row,'low_stock') else 0,
+                }
+            except Exception as e:
+                logger.error(f"Errore get_inventory_stats su {table_name}: {e}")
+                return {"total_wines": 0, "total_bottles": 0, "avg_price": None, "min_price": None, "max_price": None, "low_stock": 0}
+            
+            table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+            
+            try:
+                query = sql_text(f"""
+                    SELECT * FROM {table_name} 
+                    WHERE user_id = :user_id
+                    AND quantity <= COALESCE(min_quantity, 0)
+                    ORDER BY name
+                """)
+                
+                result = await session.execute(query, {"user_id": user.id})
+                rows = result.fetchall()
+                
+                wines = []
+                for row in rows:
+                    wine = Wine()
+                    for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                               'region', 'country', 'wine_type', 'classification', 'quantity',
+                               'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                               'description', 'notes', 'created_at', 'updated_at']:
+                        if hasattr(row, key):
+                            setattr(wine, key, getattr(row, key))
+                    wines.append(wine)
+                
+                return wines
+            except Exception as e:
+                logger.error(f"Errore recuperando scorte basse: {e}")
+                return []
+
+
+# Istanza globale
+async_db_manager = AsyncDatabaseManager()
+
+
+# Utility per cutoff periodo
+async def _compute_cutoff(period: str):
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    if period == 'week':
+        return now - timedelta(days=7)
+    if period == 'month':
+        return now - timedelta(days=30)
+    return now - timedelta(days=1)
+
+
+async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[str, Any]:
+    """
+    Riepiloga movimenti (consumi/rifornimenti) per periodo: day/week/month.
+    Ritorna dizionario con totali e top prodotti.
+    """
+    async with await get_async_session() as session:
+        # Carica utente
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.business_name:
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+        table_name = f'"{telegram_id}/{user.business_name} Consumi e rifornimenti"'
+        cutoff = await _compute_cutoff(period)
+        try:
+            totals_q = sql_text(f"""
+                SELECT 
+                  COALESCE(SUM(CASE WHEN movement_type = 'consumo' THEN ABS(quantity_change) ELSE 0 END), 0) AS total_consumed,
+                  COALESCE(SUM(CASE WHEN movement_type = 'rifornimento' THEN quantity_change ELSE 0 END), 0) AS total_replenished
+                FROM {table_name}
+                WHERE user_id = :user_id AND movement_date >= :cutoff
+            """)
+            res = await session.execute(totals_q, {"user_id": user.id, "cutoff": cutoff})
+            row = res.fetchone()
+            total_consumed = int(row.total_consumed) if row and hasattr(row, 'total_consumed') else 0
+            total_replenished = int(row.total_replenished) if row and hasattr(row, 'total_replenished') else 0
+
+            top_c_q = sql_text(f"""
+                SELECT wine_name AS name, COALESCE(SUM(ABS(quantity_change)), 0) AS qty
+                FROM {table_name}
+                WHERE user_id = :user_id AND movement_date >= :cutoff AND movement_type = 'consumo'
+                GROUP BY wine_name
+                HAVING COALESCE(SUM(ABS(quantity_change)), 0) > 0
+                ORDER BY qty DESC
+                LIMIT 5
+            """)
+            res_c = await session.execute(top_c_q, {"user_id": user.id, "cutoff": cutoff})
+            top_consumed = [(r.name, int(r.qty)) for r in res_c.fetchall()]
+
+            top_r_q = sql_text(f"""
+                SELECT wine_name AS name, COALESCE(SUM(quantity_change), 0) AS qty
+                FROM {table_name}
+                WHERE user_id = :user_id AND movement_date >= :cutoff AND movement_type = 'rifornimento'
+                GROUP BY wine_name
+                HAVING COALESCE(SUM(quantity_change), 0) > 0
+                ORDER BY qty DESC
+                LIMIT 5
+            """)
+            res_r = await session.execute(top_r_q, {"user_id": user.id, "cutoff": cutoff})
+            top_replenished = [(r.name, int(r.qty)) for r in res_r.fetchall()]
+
+            return {
+                "total_consumed": total_consumed,
+                "total_replenished": total_replenished,
+                "net_change": int(total_replenished - total_consumed),
+                "top_consumed": top_consumed,
+                "top_replenished": top_replenished,
+            }
+        except Exception as e:
+            logger.error(f"Errore riepilogo movimenti da tabella {table_name}: {e}")
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+

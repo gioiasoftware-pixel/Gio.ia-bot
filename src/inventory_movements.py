@@ -505,3 +505,162 @@ class InventoryMovementManager:
 
 # Istanza globale del gestore movimenti
 inventory_movement_manager = InventoryMovementManager()
+
+        # Raggruppa per tipo
+        consumi = [log for log in logs if log['movement_type'] == 'consumo']
+        rifornimenti = [log for log in logs if log['movement_type'] == 'rifornimento']
+        
+        message = f"📊 **Log Movimenti - Ultimi {days} giorni**\n\n"
+        
+        if consumi:
+            message += f"📉 **Consumi ({len(consumi)}):**\n"
+            for log in consumi[:10]:  # Max 10
+                date_str = log['movement_date'].strftime("%d/%m %H:%M")
+                message += f"• {date_str} - {log['wine_name']} (-{abs(log['quantity_change'])})\n"
+            message += "\n"
+        
+        if rifornimenti:
+            message += f"📈 **Rifornimenti ({len(rifornimenti)}):**\n"
+            for log in rifornimenti[:10]:  # Max 10
+                date_str = log['movement_date'].strftime("%d/%m %H:%M")
+                message += f"• {date_str} - {log['wine_name']} (+{log['quantity_change']})\n"
+            message += "\n"
+        
+        if len(logs) > 20:
+            message += f"... e altri {len(logs) - 20} movimenti"
+        
+        # Aggiungi pulsanti
+        keyboard = [
+            [InlineKeyboardButton("📊 Report Completo", callback_data="full_movement_report")],
+            [InlineKeyboardButton("📅 Ultimi 3 giorni", callback_data="logs_3d"),
+             InlineKeyboardButton("📅 Ultima settimana", callback_data="logs_7d")],
+            [InlineKeyboardButton("📅 Ultimo mese", callback_data="logs_30d")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    async def process_movement_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                             wine_id: int, movement_type: str, quantity: int) -> bool:
+        """
+        Processa un movimento quando l'utente seleziona un vino dai pulsanti inline.
+        
+        Args:
+            update: Update Telegram
+            context: Context Telegram
+            wine_id: ID del vino selezionato
+            movement_type: 'consumo' o 'rifornimento'
+            quantity: Quantità del movimento
+        """
+        try:
+            from .processor_client import processor_client
+            
+            query = update.callback_query
+            telegram_id = update.effective_user.id
+            
+            # Recupera business_name e vino
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                await query.answer("❌ Errore: Nome locale non trovato.", show_alert=True)
+                return True
+            
+            # Recupera il vino dall'ID
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            selected_wine = None
+            for wine in user_wines:
+                if wine.id == wine_id:
+                    selected_wine = wine
+                    break
+            
+            if not selected_wine:
+                await query.answer("❌ Vino non trovato.", show_alert=True)
+                return True
+            
+            # Conferma selezione
+            await query.answer(f"🔄 Elaborazione {movement_type} per {selected_wine.name}...")
+            
+            # Invia movimento al processor
+            result = await processor_client.process_movement(
+                telegram_id=telegram_id,
+                business_name=user.business_name,
+                wine_name=selected_wine.name,  # Usa il nome esatto del vino
+                movement_type=movement_type,
+                quantity=quantity
+            )
+            
+            if result.get('status') == 'success':
+                if movement_type == 'consumo':
+                    success_message = (
+                        f"✅ **Consumo registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📉 **Consumate:** {quantity} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                else:
+                    success_message = (
+                        f"✅ **Rifornimento registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                
+                await query.edit_message_text(success_message, parse_mode='Markdown')
+            else:
+                error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                if 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
+                    available_qty = result.get('available_quantity', 'N/A')
+                    await query.edit_message_text(
+                        f"⚠️ **Quantità insufficiente**\n\n"
+                        f"📦 Disponibili: {available_qty} bottiglie\n"
+                        f"🍷 Richieste: {quantity} bottiglie",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"❌ **Errore durante l'aggiornamento**\n\n"
+                        f"{error_msg[:200]}",
+                        parse_mode='Markdown'
+                    )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Errore processamento movimento da callback: {e}")
+            if update.callback_query:
+                await update.callback_query.answer("❌ Errore durante il processamento.", show_alert=True)
+            return True
+    
+    async def get_daily_summary(self, telegram_id: int, date: datetime = None) -> Dict[str, Any]:
+        """Ottieni riassunto giornaliero dei movimenti"""
+        if date is None:
+            date = datetime.utcnow()
+        
+        start_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = start_date + timedelta(days=1)
+        
+        logs = await async_db_manager.get_movement_logs(telegram_id, limit=1000)  # ASYNC - usa Consumi e rifornimenti
+        
+        # Filtra per data
+        daily_logs = [
+            log for log in logs 
+            if start_date <= log['movement_date'] < end_date
+        ]
+        
+        consumi = [log for log in daily_logs if log['movement_type'] == 'consumo']
+        rifornimenti = [log for log in daily_logs if log['movement_type'] == 'rifornimento']
+        
+        return {
+            'date': date.strftime("%d/%m/%Y"),
+            'total_movements': len(daily_logs),
+            'consumi_count': len(consumi),
+            'rifornimenti_count': len(rifornimenti),
+            'total_consumed': sum(abs(log['quantity_change']) for log in consumi),
+            'total_received': sum(log['quantity_change'] for log in rifornimenti),
+            'logs': daily_logs
+        }
+
+# Istanza globale del gestore movimenti
+inventory_movement_manager = InventoryMovementManager()

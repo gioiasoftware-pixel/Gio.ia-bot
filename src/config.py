@@ -48,7 +48,8 @@ def validate_config():
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    # Log processor URL per debug
+    # Log URLs per debug
     logger.info(f"🔗 Processor URL: {PROCESSOR_URL}")
+    logger.info(f"🔗 Viewer URL: {VIEWER_URL}")
     logger.info("✅ Configurazione validata con successo")
     return True
