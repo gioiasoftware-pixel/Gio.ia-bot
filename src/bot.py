@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from aiohttp import web
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from .ai import get_ai_response
@@ -14,6 +15,11 @@ from .logging_config import setup_colored_logging
 # Configurazione logging colorato
 setup_colored_logging("telegram-bot")
 logger = logging.getLogger(__name__)
+
+# Dict globale per tracciare richieste viewer in attesa
+# Mappa: telegram_id -> {'event': Event, 'viewer_url': str, 'correlation_id': str}
+_viewer_pending_requests = {}
+_viewer_pending_lock = asyncio.Lock()
 
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
@@ -335,7 +341,30 @@ async def view_cmd(update, context):
                     exc_info=True
                 )
         
-        # Avvia job in parallelo (fire and forget)
+        # Crea Event per attendere il link dal viewer
+        viewer_event = asyncio.Event()
+        _viewer_pending_requests[telegram_id] = {
+            'event': viewer_event,
+            'viewer_url': None,
+            'correlation_id': correlation_id
+        }
+        
+        log_with_context(
+            "info",
+            f"[VIEW] Creato Event per attendere link, telegram_id={telegram_id}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        # Messaggio all'utente: link in preparazione
+        loading_message = await update.message.reply_text(
+            f"⏳ **Generazione link in corso...**\n\n"
+            f"📋 Sto preparando il tuo inventario per la visualizzazione.\n\n"
+            f"⏱️ Attendo il link...",
+            parse_mode='Markdown'
+        )
+        
+        # Avvia job in parallelo
         asyncio.create_task(job_processor())
         asyncio.create_task(job_viewer())
         
@@ -346,23 +375,77 @@ async def view_cmd(update, context):
             correlation_id=correlation_id
         )
         
-        # Messaggio all'utente: link arriverà quando pronto
-        message = (
-            f"⏳ **Generazione link in corso...**\n\n"
-            f"📋 Sto preparando il tuo inventario per la visualizzazione.\n\n"
-            f"🔗 Riceverai il link completo tra qualche istante.\n\n"
-            f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
-        )
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Messaggio 'in corso' inviato all'utente, telegram_id={telegram_id}, "
-            f"correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
+        # Attendi il link dal viewer (timeout 60 secondi)
+        try:
+            await asyncio.wait_for(viewer_event.wait(), timeout=60.0)
+            
+            # Recupera il link dal dict
+            pending_data = _viewer_pending_requests.get(telegram_id)
+            if pending_data and pending_data.get('viewer_url'):
+                viewer_url = pending_data['viewer_url']
+                
+                log_with_context(
+                    "info",
+                    f"[VIEW] Link ricevuto, invio messaggio all'utente, telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id
+                )
+                
+                # Aggiorna messaggio con il link
+                message = (
+                    f"🌐 **Link Visualizzazione Inventario**\n\n"
+                    f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+                    f"🔗 {viewer_url}\n\n"
+                    f"⏰ **Validità:** 1 ora\n"
+                    f"💡 Se il link scade, usa `/view` per generarne uno nuovo.\n\n"
+                    f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
+                )
+                
+                await loading_message.edit_text(message, parse_mode='Markdown')
+                
+                log_with_context(
+                    "info",
+                    f"[VIEW] Link inviato all'utente con successo, telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id
+                )
+            else:
+                raise Exception("Link non disponibile dopo attesa")
+                
+        except asyncio.TimeoutError:
+            log_with_context(
+                "error",
+                f"[VIEW] Timeout attesa link dal viewer (60s), telegram_id={telegram_id}, "
+                f"correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
+            
+            await loading_message.edit_text(
+                "❌ **Timeout generazione link**\n\n"
+                "Il link non è stato generato in tempo.\n"
+                "Riprova con `/view`.",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            log_with_context(
+                "error",
+                f"[VIEW] Errore attesa link: {e}, telegram_id={telegram_id}, correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id,
+                exc_info=True
+            )
+            
+            await loading_message.edit_text(
+                "❌ **Errore generazione link**\n\n"
+                "Riprova più tardi con `/view`.",
+                parse_mode='Markdown'
+            )
+        finally:
+            # Pulisci dict
+            _viewer_pending_requests.pop(telegram_id, None)
         
     except Exception as e:
         log_with_context(
@@ -1164,48 +1247,70 @@ async def viewer_link_ready_handler(request):
         log_with_context(
             "info",
             f"[VIEWER_CALLBACK] Link pronto per telegram_id={telegram_id}, "
-            f"correlation_id={correlation_id}. Invio messaggio...",
+            f"correlation_id={correlation_id}. Sveglio task in attesa...",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
         
-        # Invia messaggio all'utente
-        try:
-            from telegram import Bot
-            bot_instance = Bot(token=TELEGRAM_BOT_TOKEN)
-            
-            # Costruisci messaggio
-            message = (
-                f"🌐 **Link Visualizzazione Inventario**\n\n"
-                f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-                f"🔗 {viewer_url}\n\n"
-                f"⏰ **Validità:** 1 ora\n"
-                f"💡 Se il link scade, usa `/view` per generarne uno nuovo."
-            )
-            
-            await bot_instance.send_message(
-                chat_id=telegram_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+        # Sveglia il task in attesa nel view_cmd
+        pending_data = _viewer_pending_requests.get(telegram_id)
+        if pending_data:
+            # Salva il link e sveglia l'evento
+            pending_data['viewer_url'] = viewer_url
+            pending_data['event'].set()
             
             log_with_context(
                 "info",
-                f"[VIEWER_CALLBACK] Messaggio inviato con successo a telegram_id={telegram_id}, "
+                f"[VIEWER_CALLBACK] Event impostato, task in attesa svegliato, telegram_id={telegram_id}, "
                 f"correlation_id={correlation_id}",
                 telegram_id=telegram_id,
                 correlation_id=correlation_id
             )
-            
-        except Exception as send_error:
+        else:
             log_with_context(
-                "error",
-                f"[VIEWER_CALLBACK] Errore invio messaggio: {send_error}, "
-                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                "warning",
+                f"[VIEWER_CALLBACK] Nessun task in attesa per telegram_id={telegram_id}, "
+                f"correlation_id={correlation_id}. Invio messaggio diretto...",
                 telegram_id=telegram_id,
-                correlation_id=correlation_id,
-                exc_info=True
+                correlation_id=correlation_id
             )
+            
+            # Fallback: invia messaggio diretto se non c'è task in attesa
+            try:
+                from telegram import Bot
+                bot_instance = Bot(token=TELEGRAM_BOT_TOKEN)
+                
+                message = (
+                    f"🌐 **Link Visualizzazione Inventario**\n\n"
+                    f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+                    f"🔗 {viewer_url}\n\n"
+                    f"⏰ **Validità:** 1 ora\n"
+                    f"💡 Se il link scade, usa `/view` per generarne uno nuovo."
+                )
+                
+                await bot_instance.send_message(
+                    chat_id=telegram_id,
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                
+                log_with_context(
+                    "info",
+                    f"[VIEWER_CALLBACK] Messaggio inviato direttamente a telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id
+                )
+                
+            except Exception as send_error:
+                log_with_context(
+                    "error",
+                    f"[VIEWER_CALLBACK] Errore invio messaggio diretto: {send_error}, "
+                    f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id,
+                    exc_info=True
+                )
             # Non fallire completamente, ritorna successo comunque
             # Il viewer ha fatto il suo lavoro
         
