@@ -777,6 +777,7 @@ async def chat_handler(update, context):
         try:
             from .admin_notifications import enqueue_admin_notification
             from .structured_logging import get_correlation_id
+            from .database_async import async_db_manager
             
             user = update.effective_user
             telegram_id = user.id if user else None
