@@ -1320,7 +1320,12 @@ def _start_health_server(port: int) -> None:
             from urllib.parse import urlparse
             
             parsed_path = urlparse(self.path)
-            logger.info(f"[HEALTH_SERVER] Richiesta POST ricevuta: path={parsed_path.path}, headers={dict(self.headers)}")
+            logger.info(f"[HEALTH_SERVER] 📥 Richiesta POST ricevuta: path={parsed_path.path}, method={self.command}, client={self.client_address}, headers_count={len(self.headers)}")
+            
+            # Log headers importanti
+            content_type = self.headers.get('Content-Type', 'N/A')
+            content_length = self.headers.get('Content-Length', '0')
+            logger.info(f"[HEALTH_SERVER] Headers: Content-Type={content_type}, Content-Length={content_length}")
             
             if parsed_path.path == "/api/viewer/link-ready":
                 try:
@@ -1386,8 +1391,11 @@ def _start_health_server(port: int) -> None:
 
     def serve():
         httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
-        logger.info(f"Health server in ascolto su 0.0.0.0:{port} - Gestisce GET /healthcheck e POST /api/viewer/link-ready")
-        httpd.serve_forever()
+        logger.info(f"✅ Health server AVVIATO in ascolto su 0.0.0.0:{port} - Gestisce GET /healthcheck e POST /api/viewer/link-ready")
+        try:
+            httpd.serve_forever()
+        except Exception as server_error:
+            logger.error(f"❌ Errore health server: {server_error}", exc_info=True)
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
