@@ -1291,25 +1291,6 @@ async def viewer_link_ready_handler(request):
                     telegram_id=telegram_id,
                     correlation_id=correlation_id
                 )
-        else:
-            log_with_context(
-                "warning",
-                f"[VIEWER_CALLBACK] Nessun task in attesa per telegram_id={telegram_id}, "
-                f"correlation_id={correlation_id}. Invio messaggio diretto...",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-            
-            # Fallback: invia messaggio diretto se non c'è task in attesa
-            try:
-                from telegram import Bot
-                bot_instance = Bot(token=TELEGRAM_BOT_TOKEN)
-                
-                message = (
-                    f"🌐 **Link Visualizzazione Inventario**\n\n"
-                    f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-                    f"🔗 {viewer_url}\n\n"
-                    f"⏰ **Validità:** 1 ora\n"
                     f"💡 Se il link scade, usa `/view` per generarne uno nuovo."
                 )
                 
