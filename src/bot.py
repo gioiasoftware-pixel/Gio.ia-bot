@@ -231,9 +231,10 @@ async def view_cmd(update, context):
         import asyncio
         import aiohttp
         
-        # URL servizi
-        PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
-        VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
+        # URL servizi (usa config se disponibile, altrimenti default)
+        from .config import PROCESSOR_URL as CONFIG_PROCESSOR_URL, VIEWER_URL as CONFIG_VIEWER_URL
+        PROCESSOR_URL = CONFIG_PROCESSOR_URL
+        VIEWER_URL = CONFIG_VIEWER_URL
         
         # Assicura che VIEWER_URL abbia il protocollo
         if VIEWER_URL and not VIEWER_URL.startswith(("http://", "https://")):
