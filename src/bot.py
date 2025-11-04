@@ -235,6 +235,18 @@ async def view_cmd(update, context):
         PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
         VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
         
+        # Assicura che VIEWER_URL abbia il protocollo
+        if VIEWER_URL and not VIEWER_URL.startswith(("http://", "https://")):
+            VIEWER_URL = f"https://{VIEWER_URL}"
+        
+        log_with_context(
+            "info",
+            f"[VIEW] Configurazione URL servizi: PROCESSOR_URL={PROCESSOR_URL}, VIEWER_URL={VIEWER_URL}, "
+            f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
         # Job 1: Processor - prepara dati
         async def job_processor():
             try:
@@ -310,10 +322,13 @@ async def view_cmd(update, context):
                                 correlation_id=correlation_id
                             )
             except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
                 log_with_context(
                     "error",
                     f"[VIEW_JOB2] Errore job viewer: {e}, telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
+                    f"correlation_id={correlation_id}, VIEWER_URL={VIEWER_URL}, "
+                    f"error_details={error_details[:500]}",
                     telegram_id=telegram_id,
                     correlation_id=correlation_id,
                     exc_info=True
