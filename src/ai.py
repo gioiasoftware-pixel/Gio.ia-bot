@@ -27,6 +27,50 @@ os.environ.pop('all_proxy', None)
 logger = logging.getLogger(__name__)
 
 
+def _is_general_conversation(prompt: str) -> bool:
+    """
+    Rileva se la domanda è una conversazione generale NON relativa all'inventario/vini.
+    Se è una domanda generale, deve essere passata all'AI senza cercare vini.
+    """
+    p = prompt.lower().strip()
+    
+    # Pattern per domande generali sul bot
+    general_patterns = [
+        r'\b(chi\s+sei|cosa\s+fai|parlami\s+di\s+te|cosa\s+puoi\s+fare|dimmi\s+di\s+te|raccontami\s+di\s+te)',
+        r'\b(aiuto|help|assistenza|supporto)',
+        r'\b(ciao|salve|buongiorno|buonasera|buonanotte)',
+        r'\b(grazie|prego|perfetto|ok|va bene)',
+        r'\b(come\s+stai|come\s+va|tutto\s+bene)',
+    ]
+    
+    # Se matcha pattern generali E non contiene termini relativi a vini/inventario
+    wine_related_keywords = [
+        'vino', 'vini', 'bottiglia', 'bottiglie', 'inventario', 'cantina', 'magazzino',
+        'consumo', 'consumi', 'rifornimento', 'rifornimenti', 'venduto', 'comprato',
+        'barolo', 'chianti', 'brunello', 'amarone', 'prosecco', 'champagne',
+        'prezzo', 'quantità', 'annata', 'produttore', 'regione', 'toscana', 'piemonte'
+    ]
+    
+    # Controlla se contiene pattern generali
+    has_general_pattern = any(re.search(pt, p) for pt in general_patterns)
+    
+    # Controlla se NON contiene termini relativi a vini
+    has_wine_keywords = any(kw in p for kw in wine_related_keywords)
+    
+    # Se ha pattern generali E non ha keyword vini, è una conversazione generale
+    if has_general_pattern and not has_wine_keywords:
+        return True
+    
+    # Se è una domanda molto corta senza keyword vini, probabilmente è generale
+    if len(p.split()) <= 5 and not has_wine_keywords:
+        # Controlla se contiene parole comuni di domande generali
+        general_words = ['chi', 'cosa', 'come', 'perché', 'quando', 'dove', 'perché']
+        if any(word in p for word in general_words):
+            return True
+    
+    return False
+
+
 def _is_inventory_list_request(prompt: str) -> bool:
     """
     Riconosce richieste tipo: che vini ho? elenco/lista inventario, mostra inventario, ecc.
@@ -478,6 +522,12 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
     # Rileva movimenti inventario PRIMA di chiamare l'AI - ASYNC
     # Se riconosce un movimento, ritorna un marker speciale che il bot.py interpreterà
     if telegram_id:
+        # Se è una conversazione generale NON relativa all'inventario, passa direttamente all'AI
+        if _is_general_conversation(prompt):
+            logger.info(f"[GENERAL_CONVERSATION] Rilevata conversazione generale, bypass ricerca vini")
+            # Passa direttamente all'AI senza cercare vini
+            # Continua oltre per chiamare l'AI normalmente
+        
         # Richieste esplicite di elenco inventario: rispondi direttamente interrogando il DB
         if _is_inventory_list_request(prompt):
             return await _build_inventory_list_response(telegram_id, limit=50)
@@ -538,9 +588,16 @@ INVENTARIO ATTUALE:
                                 break
                     
                     # Se è stata rilevata una ricerca, cerca nel database - ASYNC
-                    if wine_search_term:
-                        found_wines = await async_db_manager.search_wines(telegram_id, wine_search_term, limit=5)
+                    # Ma solo se NON è una conversazione generale
+                    if wine_search_term and not _is_general_conversation(prompt):
+                        found_wines = await async_db_manager.search_wines(telegram_id, wine_search_term, limit=10)
                         if found_wines:
+                            # Se ci sono più corrispondenze, restituisci marker per selezione con pulsanti
+                            if len(found_wines) > 1:
+                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', richiesta selezione")
+                                # Marker che verrà processato in bot.py per mostrare pulsanti
+                                return f"[[WINE_SELECTION:{wine_search_term}]]"
+                            
                             # Prova a generare risposta pre-formattata (bypass AI per domande specifiche)
                             formatted_response = _format_wine_response_directly(prompt, telegram_id, found_wines)
                             if formatted_response:

@@ -91,3 +91,4 @@ ffmpeg-python>=0.2.0  # Opzionale, solo se conversione locale
 - [OpenAI Whisper API](https://platform.openai.com/docs/guides/speech-to-text)
 - [Python Telegram Bot - Filters](https://python-telegram-bot.readthedocs.io/en/stable/telegram.ext.filters.html)
 
+

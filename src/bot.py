@@ -299,6 +299,39 @@ async def chat_handler(update, context):
                 logger.info(f"Movimento processato e risposta inviata a {username}")
                 return
         
+        # Selezione vino quando ci sono più corrispondenze (AI marker)
+        if reply and reply.startswith("[[WINE_SELECTION:"):
+            try:
+                # Estrai termine di ricerca dal marker
+                search_term = reply.replace("[[WINE_SELECTION:", "").replace("]]", "").strip()
+                
+                # Cerca tutti i vini corrispondenti
+                matching_wines = await async_db_manager.search_wines(telegram_id, search_term, limit=10)
+                
+                if len(matching_wines) > 1:
+                    message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{search_term}'**\n\n"
+                    message += "Quale tra questi intendi?\n\n"
+                    
+                    # Crea pulsanti inline con i nomi completi dei vini
+                    keyboard = []
+                    for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
+                        wine_display = wine.name
+                        if wine.producer:
+                            wine_display += f" ({wine.producer})"
+                        if wine.vintage:
+                            wine_display += f" {wine.vintage}"
+                        
+                        # Callback data: wine_info:{wine_id}
+                        callback_data = f"wine_info:{wine.id}"
+                        keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                    
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+                    return
+            except Exception as e:
+                logger.error(f"Errore gestione selezione vino: {e}")
+                # Fallback: continua con risposta normale
+        
         # Richiesta periodo movimenti (AI marker)
         if reply and '[[ASK_MOVES_PERIOD]]' in reply:
             try:
@@ -737,6 +770,58 @@ async def callback_handler(update, context):
         except Exception:
             pass
 
+    # Gestisci callback movimenti (selezione vino da pulsanti)
+    if query.data and query.data.startswith("movimento_consumo:"):
+        try:
+            _, wine_id_str, quantity_str = query.data.split(":")
+            wine_id = int(wine_id_str)
+            quantity = int(quantity_str)
+            if await inventory_movement_manager.process_movement_from_callback(update, context, wine_id, 'consumo', quantity):
+                return
+        except Exception as e:
+            logger.error(f"Errore callback movimento consumo: {e}")
+    
+    if query.data and query.data.startswith("movimento_rifornimento:"):
+        try:
+            _, wine_id_str, quantity_str = query.data.split(":")
+            wine_id = int(wine_id_str)
+            quantity = int(quantity_str)
+            if await inventory_movement_manager.process_movement_from_callback(update, context, wine_id, 'rifornimento', quantity):
+                return
+        except Exception as e:
+            logger.error(f"Errore callback movimento rifornimento: {e}")
+    
+    # Gestisci callback selezione vino per info
+    if query.data and query.data.startswith("wine_info:"):
+        try:
+            _, wine_id_str = query.data.split(":")
+            wine_id = int(wine_id_str)
+            telegram_id = update.effective_user.id
+            
+            # Recupera il vino dall'ID
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            selected_wine = None
+            for wine in user_wines:
+                if wine.id == wine_id:
+                    selected_wine = wine
+                    break
+            
+            if not selected_wine:
+                await query.answer("❌ Vino non trovato.", show_alert=True)
+                return
+            
+            # Mostra info complete del vino
+            from .response_templates import format_wine_info
+            wine_info_text = format_wine_info(selected_wine)
+            
+            await query.answer(f"📋 Informazioni su {selected_wine.name}")
+            await query.edit_message_text(wine_info_text, parse_mode='Markdown')
+            return
+        except Exception as e:
+            logger.error(f"Errore callback info vino: {e}")
+            if update.callback_query:
+                await update.callback_query.answer("❌ Errore durante il recupero informazioni.", show_alert=True)
+    
     # Gestisci callback inventario - ASYNC
     if await inventory_manager.handle_wine_callback(update, context):
         return

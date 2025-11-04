@@ -119,11 +119,44 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
+            # Cerca tutti i vini che corrispondono al termine di ricerca
+            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
+            
+            # Se ci sono più corrispondenze, mostra pulsanti per selezione
+            if len(matching_wines) > 1:
+                message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
+                message += "Quale tra questi intendi?\n\n"
+                
+                # Crea pulsanti inline con i nomi completi dei vini
+                keyboard = []
+                for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
+                    wine_display = wine.name
+                    if wine.producer:
+                        wine_display += f" ({wine.producer})"
+                    if wine.vintage:
+                        wine_display += f" {wine.vintage}"
+                    
+                    # Callback data: movimento_consumo:{wine_id}:{quantity}
+                    callback_data = f"movimento_consumo:{wine.id}:{quantity}"
+                    keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+                return True
+            
+            # Se c'è una sola corrispondenza o nessuna, procedi normalmente
+            if len(matching_wines) == 1:
+                # Usa il nome esatto del vino trovato
+                exact_wine_name = matching_wines[0].name
+            else:
+                # Nessuna corrispondenza esatta, prova comunque con il nome originale
+                exact_wine_name = wine_name
+            
             # Invia movimento al processor (job asincrono)
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
                 business_name=business_name,
-                wine_name=wine_name,
+                wine_name=exact_wine_name,
                 movement_type='consumo',
                 quantity=quantity
             )
@@ -188,11 +221,44 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
+            # Cerca tutti i vini che corrispondono al termine di ricerca
+            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
+            
+            # Se ci sono più corrispondenze, mostra pulsanti per selezione
+            if len(matching_wines) > 1:
+                message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
+                message += "Quale tra questi intendi?\n\n"
+                
+                # Crea pulsanti inline con i nomi completi dei vini
+                keyboard = []
+                for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
+                    wine_display = wine.name
+                    if wine.producer:
+                        wine_display += f" ({wine.producer})"
+                    if wine.vintage:
+                        wine_display += f" {wine.vintage}"
+                    
+                    # Callback data: movimento_rifornimento:{wine_id}:{quantity}
+                    callback_data = f"movimento_rifornimento:{wine.id}:{quantity}"
+                    keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+                return True
+            
+            # Se c'è una sola corrispondenza o nessuna, procedi normalmente
+            if len(matching_wines) == 1:
+                # Usa il nome esatto del vino trovato
+                exact_wine_name = matching_wines[0].name
+            else:
+                # Nessuna corrispondenza esatta, prova comunque con il nome originale
+                exact_wine_name = wine_name
+            
             # Invia movimento al processor (job asincrono)
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
                 business_name=business_name,
-                wine_name=wine_name,
+                wine_name=exact_wine_name,
                 movement_type='rifornimento',
                 quantity=quantity
             )
@@ -314,6 +380,99 @@ class InventoryMovementManager:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    async def process_movement_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                             wine_id: int, movement_type: str, quantity: int) -> bool:
+        """
+        Processa un movimento quando l'utente seleziona un vino dai pulsanti inline.
+        
+        Args:
+            update: Update Telegram
+            context: Context Telegram
+            wine_id: ID del vino selezionato
+            movement_type: 'consumo' o 'rifornimento'
+            quantity: Quantità del movimento
+        """
+        try:
+            from .processor_client import processor_client
+            
+            query = update.callback_query
+            telegram_id = update.effective_user.id
+            
+            # Recupera business_name e vino
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+            if not user or not user.business_name:
+                await query.answer("❌ Errore: Nome locale non trovato.", show_alert=True)
+                return True
+            
+            # Recupera il vino dall'ID
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            selected_wine = None
+            for wine in user_wines:
+                if wine.id == wine_id:
+                    selected_wine = wine
+                    break
+            
+            if not selected_wine:
+                await query.answer("❌ Vino non trovato.", show_alert=True)
+                return True
+            
+            # Conferma selezione
+            await query.answer(f"🔄 Elaborazione {movement_type} per {selected_wine.name}...")
+            
+            # Invia movimento al processor
+            result = await processor_client.process_movement(
+                telegram_id=telegram_id,
+                business_name=user.business_name,
+                wine_name=selected_wine.name,  # Usa il nome esatto del vino
+                movement_type=movement_type,
+                quantity=quantity
+            )
+            
+            if result.get('status') == 'success':
+                if movement_type == 'consumo':
+                    success_message = (
+                        f"✅ **Consumo registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📉 **Consumate:** {quantity} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                else:
+                    success_message = (
+                        f"✅ **Rifornimento registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                
+                await query.edit_message_text(success_message, parse_mode='Markdown')
+            else:
+                error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                if 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
+                    available_qty = result.get('available_quantity', 'N/A')
+                    await query.edit_message_text(
+                        f"⚠️ **Quantità insufficiente**\n\n"
+                        f"📦 Disponibili: {available_qty} bottiglie\n"
+                        f"🍷 Richieste: {quantity} bottiglie",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"❌ **Errore durante l'aggiornamento**\n\n"
+                        f"{error_msg[:200]}",
+                        parse_mode='Markdown'
+                    )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Errore processamento movimento da callback: {e}")
+            if update.callback_query:
+                await update.callback_query.answer("❌ Errore durante il processamento.", show_alert=True)
+            return True
     
     async def get_daily_summary(self, telegram_id: int, date: datetime = None) -> Dict[str, Any]:
         """Ottieni riassunto giornaliero dei movimenti"""

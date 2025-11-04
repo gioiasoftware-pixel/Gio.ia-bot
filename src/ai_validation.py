@@ -39,3 +39,4 @@ def validate_movement_result(json_data: dict) -> Optional[MovementDetectionResul
 
 
 
+
