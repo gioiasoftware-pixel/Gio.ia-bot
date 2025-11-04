@@ -575,6 +575,32 @@ class NewOnboardingManager:
             
             logger.info(f"Onboarding completato per {business_name_from_db} (ID: {telegram_id})")
             
+            # Notifica admin
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                onboarding_start = context.user_data.get('onboarding_start_time')
+                duration_seconds = None
+                if onboarding_start:
+                    import time
+                    duration_seconds = int(time.time() - onboarding_start)
+                
+                await enqueue_admin_notification(
+                    event_type="onboarding_completed",
+                    telegram_id=telegram_id,
+                    payload={
+                        "business_name": business_name_from_db,
+                        "user_name": user.username or user.first_name or "N/A",
+                        "onboarding_duration_seconds": duration_seconds,
+                        "inventory_items_count": processed_wines,
+                        "warning_count": warning_count
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
         except Exception as e:
             logger.error(f"Errore completamento onboarding: {e}")
             await update.message.reply_text(

@@ -76,5 +76,28 @@ def get_request_context() -> dict:
         return {"telegram_id": None, "correlation_id": None}
 
 
+def get_correlation_id(context_or_var=None) -> Optional[str]:
+    """
+    Ottieni correlation_id dal context o dalle context vars.
+    
+    Args:
+        context_or_var: Context Telegram (opzionale) o None per usare context vars
+    
+    Returns:
+        correlation_id come stringa o None
+    """
+    try:
+        if context_or_var and hasattr(context_or_var, 'user_data'):
+            # Prova a leggere dal context Telegram
+            correlation_id = context_or_var.user_data.get('correlation_id')
+            if correlation_id:
+                return correlation_id
+        
+        # Prova a leggere dalle context vars
+        return _current_correlation_id.get()
+    except (LookupError, AttributeError):
+        return None
+
+
 
 

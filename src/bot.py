@@ -400,6 +400,36 @@ async def chat_handler(update, context):
         
     except Exception as e:
         logger.error(f"Errore in chat_handler: {e}")
+        
+        # Notifica admin per errore
+        try:
+            from .admin_notifications import enqueue_admin_notification
+            from .structured_logging import get_correlation_id
+            
+            user = update.effective_user
+            telegram_id = user.id if user else None
+            
+            if telegram_id:
+                user_db = await async_db_manager.get_user_by_telegram_id(telegram_id) if telegram_id else None
+                business_name = user_db.business_name if user_db else None
+                
+                await enqueue_admin_notification(
+                    event_type="error",
+                    telegram_id=telegram_id,
+                    payload={
+                        "business_name": business_name or "N/A",
+                        "error_type": "chat_handler_error",
+                        "error_message": str(e),
+                        "error_code": "CHAT_ERROR",
+                        "component": "telegram-ai-bot",
+                        "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
+                        "user_visible_error": "⚠️ Errore temporaneo. Riprova tra qualche minuto."
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+        except Exception as notif_error:
+            logger.warning(f"Errore invio notifica admin: {notif_error}")
+        
         await update.message.reply_text("⚠️ Errore temporaneo. Riprova tra qualche minuto.")
 
 
