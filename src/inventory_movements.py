@@ -153,6 +153,12 @@ class InventoryMovementManager:
                 exact_wine_name = wine_name
             
             # Invia movimento al processor (job asincrono)
+            logger.info(
+                f"[MOVEMENT] Calling processor_client.process_movement | "
+                f"telegram_id={telegram_id}, business={business_name}, "
+                f"wine_name='{exact_wine_name}', movement_type=consumo, quantity={quantity}"
+            )
+            
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
                 business_name=business_name,
@@ -161,7 +167,17 @@ class InventoryMovementManager:
                 quantity=quantity
             )
             
-            if result.get('status') == 'success':
+            logger.info(
+                f"[MOVEMENT] Processor response received | "
+                f"telegram_id={telegram_id}, wine_name='{exact_wine_name}' | "
+                f"status={result.get('status')}, job_id={result.get('job_id')}, "
+                f"error={result.get('error')}, error_message={result.get('error_message')}, "
+                f"full_result_keys={list(result.keys())}"
+            )
+            
+            # Il processor ritorna status='processing' quando crea il job
+            # ma il job si completa in background, quindi dobbiamo attendere o controllare diversamente
+            if result.get('status') == 'success' or result.get('status') == 'completed':
                 success_message = (
                     f"✅ **Consumo registrato**\n\n"
                     f"🍷 **Vino:** {result.get('wine_name')}\n"
@@ -200,8 +216,17 @@ class InventoryMovementManager:
             return True
             
         except Exception as e:
-            logger.error(f"Errore processamento consumo: {e}")
-            await update.message.reply_text("❌ Errore durante il processamento. Riprova.")
+            logger.error(
+                f"[MOVEMENT] Exception in _process_consumo | "
+                f"telegram_id={telegram_id}, wine_name='{wine_name}', quantity={quantity} | "
+                f"error={str(e)}",
+                exc_info=True
+            )
+            await update.message.reply_text(
+                f"❌ **Errore durante il processamento**\n\n"
+                f"Errore: {str(e)[:200]}\n\n"
+                f"Riprova più tardi."
+            )
             return True
     
     async def _process_rifornimento(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 

@@ -48,6 +48,11 @@ class ProcessorClient:
         quantity: int
     ) -> Dict[str, Any]:
         """Processa movimento inventario (consumo/rifornimento)"""
+        logger.info(
+            f"[PROCESSOR_CLIENT] process_movement called | "
+            f"telegram_id={telegram_id}, business={business_name}, "
+            f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity}"
+        )
         try:
             data = aiohttp.FormData()
             data.add_field('telegram_id', str(telegram_id))
@@ -56,26 +61,91 @@ class ProcessorClient:
             data.add_field('movement_type', movement_type)
             data.add_field('quantity', str(quantity))
             
+            logger.debug(f"[PROCESSOR_CLIENT] Sending POST to {self.base_url}/process-movement")
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.base_url}/process-movement",
                     data=data,
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
+                    response_text = await response.text()
+                    logger.debug(
+                        f"[PROCESSOR_CLIENT] Response status={response.status} | "
+                        f"telegram_id={telegram_id}, wine_name='{wine_name}' | "
+                        f"response_preview={response_text[:200]}"
+                    )
+                    
                     if response.status == 200:
-                        return await response.json()
+                        try:
+                            result = await response.json()
+                            logger.info(
+                                f"[PROCESSOR_CLIENT] process_movement success | "
+                                f"telegram_id={telegram_id}, wine_name='{wine_name}', "
+                                f"job_id={result.get('job_id')}, status={result.get('status')}"
+                            )
+                            return result
+                        except Exception as json_error:
+                            logger.error(
+                                f"[PROCESSOR_CLIENT] Failed to parse JSON response | "
+                                f"telegram_id={telegram_id}, wine_name='{wine_name}' | "
+                                f"response_text={response_text[:500]} | error={json_error}",
+                                exc_info=True
+                            )
+                            return {
+                                "status": "error",
+                                "error": f"Failed to parse response: {str(json_error)}",
+                                "error_message": f"Failed to parse response: {str(json_error)}"
+                            }
                     else:
-                        error_text = await response.text()
-                        logger.error(f"[PROCESSOR_CLIENT] Errore process_movement: HTTP {response.status} - {error_text}")
+                        logger.error(
+                            f"[PROCESSOR_CLIENT] HTTP error {response.status} | "
+                            f"telegram_id={telegram_id}, business={business_name}, "
+                            f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
+                            f"response_text={response_text[:500]}"
+                        )
                         return {
-                            "success": False,
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
+                            "status": "error",
+                            "error": f"HTTP {response.status}: {response_text[:200]}",
+                            "error_message": f"HTTP {response.status}: {response_text[:200]}"
                         }
-        except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore process_movement: {e}", exc_info=True)
+        except asyncio.TimeoutError as te:
+            logger.error(
+                f"[PROCESSOR_CLIENT] Timeout calling processor | "
+                f"telegram_id={telegram_id}, business={business_name}, "
+                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity}",
+                exc_info=True
+            )
             return {
-                "success": False,
-                "error": str(e)
+                "status": "error",
+                "error": f"Timeout calling processor: {str(te)}",
+                "error_message": f"Timeout calling processor: {str(te)}"
+            }
+        except aiohttp.ClientError as ce:
+            logger.error(
+                f"[PROCESSOR_CLIENT] HTTP client error | "
+                f"telegram_id={telegram_id}, business={business_name}, "
+                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
+                f"error={str(ce)}",
+                exc_info=True
+            )
+            return {
+                "status": "error",
+                "error": f"HTTP client error: {str(ce)}",
+                "error_message": f"HTTP client error: {str(ce)}"
+            }
+        except Exception as e:
+            logger.error(
+                f"[PROCESSOR_CLIENT] Unexpected error in process_movement | "
+                f"telegram_id={telegram_id}, business={business_name}, "
+                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
+                f"error={str(e)}",
+                exc_info=True
+            )
+            return {
+                "status": "error",
+                "error": f"Unexpected error: {str(e)}",
+                "error_message": f"Unexpected error: {str(e)}"
             }
     
     async def process_inventory(
