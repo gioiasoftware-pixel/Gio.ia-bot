@@ -1248,7 +1248,7 @@ def _start_health_server(port: int) -> None:
             from urllib.parse import urlparse
             
             parsed_path = urlparse(self.path)
-            logger.info(f"[HEALTH_SERVER] Richiesta POST ricevuta: path={parsed_path.path}")
+            logger.info(f"[HEALTH_SERVER] Richiesta POST ricevuta: path={parsed_path.path}, headers={dict(self.headers)}")
             
             if parsed_path.path == "/api/viewer/link-ready":
                 try:
@@ -1314,7 +1314,7 @@ def _start_health_server(port: int) -> None:
 
     def serve():
         httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
-        logger.info(f"Health server in ascolto su 0.0.0.0:{port}")
+        logger.info(f"Health server in ascolto su 0.0.0.0:{port} - Gestisce GET /healthcheck e POST /api/viewer/link-ready")
         httpd.serve_forever()
 
     thread = threading.Thread(target=serve, daemon=True)
