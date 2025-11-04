@@ -33,28 +33,65 @@ async def check_rate_limit(
         async with await get_async_session() as session:
             from sqlalchemy import text as sql_text
             
+            # Crea tabella se non esiste (auto-migration)
+            try:
+                create_table_query = sql_text("""
+                    CREATE TABLE IF NOT EXISTS rate_limit_logs (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id BIGINT NOT NULL,
+                        action_type TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        INDEX idx_rate_limit_user_action (telegram_id, action_type, created_at)
+                    )
+                """)
+                await session.execute(create_table_query)
+                await session.commit()
+            except Exception as create_error:
+                # Se fallisce, prova con sintassi PostgreSQL standard
+                try:
+                    create_table_query = sql_text("""
+                        CREATE TABLE IF NOT EXISTS rate_limit_logs (
+                            id SERIAL PRIMARY KEY,
+                            telegram_id BIGINT NOT NULL,
+                            action_type TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_rate_limit_user_action 
+                        ON rate_limit_logs (telegram_id, action_type, created_at);
+                    """)
+                    await session.execute(create_table_query)
+                    await session.commit()
+                except Exception:
+                    # Se ancora fallisce, passa (fail open)
+                    logger.warning(f"[RATE_LIMIT] Impossibile creare tabella: {create_error}")
+            
             # Calcola timestamp finestra
             window_start = datetime.utcnow() - timedelta(seconds=window_seconds)
             
             # Conta richieste nella finestra
-            count_query = sql_text("""
-                SELECT COUNT(*) as count
-                FROM rate_limit_logs
-                WHERE telegram_id = :telegram_id
-                  AND action_type = :action_type
-                  AND created_at >= :window_start
-            """)
-            
-            result = await session.execute(
-                count_query,
-                {
-                    "telegram_id": telegram_id,
-                    "action_type": action_type,
-                    "window_start": window_start
-                }
-            )
-            row = result.fetchone()
-            count = row[0] if row else 0
+            try:
+                count_query = sql_text("""
+                    SELECT COUNT(*) as count
+                    FROM rate_limit_logs
+                    WHERE telegram_id = :telegram_id
+                      AND action_type = :action_type
+                      AND created_at >= :window_start
+                """)
+                
+                result = await session.execute(
+                    count_query,
+                    {
+                        "telegram_id": telegram_id,
+                        "action_type": action_type,
+                        "window_start": window_start
+                    }
+                )
+                row = result.fetchone()
+                count = row[0] if row else 0
+            except Exception as count_error:
+                # Se tabella non esiste, permettere (fail open)
+                logger.warning(f"[RATE_LIMIT] Errore conteggio: {count_error}")
+                return True, None
             
             # Se superato limite, calcola retry_after
             if count >= max_requests:
