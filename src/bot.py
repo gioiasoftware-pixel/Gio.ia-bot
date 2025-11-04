@@ -218,68 +218,123 @@ async def view_cmd(update, context):
             )
             return
         
-        # Chiama processor per generare viewer HTML
+        # Avvia 2 job asincroni: Processor (prepara dati) e Viewer (genera HTML)
         log_with_context(
             "info",
-            f"[VIEW] Chiamata processor per generazione viewer per telegram_id={telegram_id}, "
-            f"business_name={user_db.business_name}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        from .processor_client import ProcessorClient
-        processor_client = ProcessorClient()
-        
-        try:
-            result = await processor_client.generate_viewer(
-                telegram_id, 
-                user_db.business_name, 
-                correlation_id
-            )
-            
-            viewer_link = result.get("viewer_url")
-            
-            if not viewer_link:
-                raise Exception("Processor non ha restituito viewer_url")
-            
-            log_with_context(
-                "info",
-                f"[VIEW] Viewer generato con successo: view_id={result.get('view_id')}, "
-                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-            
-        except Exception as e:
-            log_with_context(
-                "error",
-                f"[VIEW] Errore chiamata processor per viewer: {e}, telegram_id={telegram_id}, "
-                f"correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id,
-                exc_info=True
-            )
-            await update.message.reply_text(
-                "❌ **Errore generazione link**\n\n"
-                "Riprova più tardi o contatta il supporto."
-            )
-            return
-        
-        log_with_context(
-            "info",
-            f"[VIEW] URL viewer generato: {viewer_link[:100]}... (troncato), "
+            f"[VIEW] Avvio job asincroni: processor (prepara dati) e viewer (genera HTML), "
+            f"telegram_id={telegram_id}, business_name={user_db.business_name}, "
             f"correlation_id={correlation_id}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
         
-        # Messaggio con link
+        import asyncio
+        import aiohttp
+        
+        # URL servizi
+        PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
+        VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
+        
+        # Job 1: Processor - prepara dati
+        async def job_processor():
+            try:
+                form = aiohttp.FormData()
+                form.add_field('telegram_id', str(telegram_id))
+                form.add_field('business_name', user_db.business_name)
+                form.add_field('correlation_id', correlation_id)
+                
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                    async with session.post(
+                        f"{PROCESSOR_URL}/api/viewer/prepare-data",
+                        data=form
+                    ) as response:
+                        if response.status == 200:
+                            log_with_context(
+                                "info",
+                                f"[VIEW_JOB1] Dati preparati con successo dal processor, "
+                                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                                telegram_id=telegram_id,
+                                correlation_id=correlation_id
+                            )
+                        else:
+                            error_text = await response.text()
+                            log_with_context(
+                                "error",
+                                f"[VIEW_JOB1] Errore preparazione dati: HTTP {response.status}, "
+                                f"telegram_id={telegram_id}, error={error_text[:200]}, "
+                                f"correlation_id={correlation_id}",
+                                telegram_id=telegram_id,
+                                correlation_id=correlation_id
+                            )
+            except Exception as e:
+                log_with_context(
+                    "error",
+                    f"[VIEW_JOB1] Errore job processor: {e}, telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id,
+                    exc_info=True
+                )
+        
+        # Job 2: Viewer - genera HTML e invia link al bot
+        async def job_viewer():
+            try:
+                payload = {
+                    "telegram_id": telegram_id,
+                    "business_name": user_db.business_name,
+                    "correlation_id": correlation_id
+                }
+                
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                    async with session.post(
+                        f"{VIEWER_URL}/api/generate",
+                        json=payload
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            log_with_context(
+                                "info",
+                                f"[VIEW_JOB2] Viewer generato con successo: view_id={result.get('view_id')}, "
+                                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                                telegram_id=telegram_id,
+                                correlation_id=correlation_id
+                            )
+                        else:
+                            error_text = await response.text()
+                            log_with_context(
+                                "error",
+                                f"[VIEW_JOB2] Errore generazione viewer: HTTP {response.status}, "
+                                f"telegram_id={telegram_id}, error={error_text[:200]}, "
+                                f"correlation_id={correlation_id}",
+                                telegram_id=telegram_id,
+                                correlation_id=correlation_id
+                            )
+            except Exception as e:
+                log_with_context(
+                    "error",
+                    f"[VIEW_JOB2] Errore job viewer: {e}, telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id,
+                    exc_info=True
+                )
+        
+        # Avvia job in parallelo (fire and forget)
+        asyncio.create_task(job_processor())
+        asyncio.create_task(job_viewer())
+        
+        log_with_context(
+            "info",
+            f"[VIEW] Job avviati in parallelo, telegram_id={telegram_id}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        # Messaggio all'utente: link arriverà quando pronto
         message = (
-            f"🌐 **Link Visualizzazione Inventario**\n\n"
-            f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-            f"🔗 {viewer_link}\n\n"
-            f"⏰ **Validità:** 1 ora (link temporaneo)\n"
-            f"💡 Se il link scade, usa `/view` per generarne uno nuovo.\n\n"
+            f"⏳ **Generazione link in corso...**\n\n"
+            f"📋 Sto preparando il tuo inventario per la visualizzazione.\n\n"
+            f"🔗 Riceverai il link completo tra qualche istante.\n\n"
             f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
         )
         
@@ -287,8 +342,8 @@ async def view_cmd(update, context):
         
         log_with_context(
             "info",
-            f"[VIEW] Link viewer generato e inviato con successo per {telegram_id}/{user_db.business_name}, "
-            f"vini_count={len(user_wines)}, correlation_id={correlation_id}",
+            f"[VIEW] Messaggio 'in corso' inviato all'utente, telegram_id={telegram_id}, "
+            f"correlation_id={correlation_id}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
@@ -982,6 +1037,7 @@ async def callback_handler(update, context):
     # Gestisci callback selezione vino per info
     if query.data and query.data.startswith("wine_info:"):
         try:
+            from .database_async import async_db_manager
             _, wine_id_str = query.data.split(":")
             wine_id = int(wine_id_str)
             telegram_id = update.effective_user.id
@@ -1034,16 +1090,128 @@ async def healthcheck_handler(request: web.Request):
     return web.Response(text="OK", status=200)
 
 
+async def viewer_link_ready_handler(request):
+    """
+    Endpoint per ricevere link pronto dal viewer.
+    """
+    from .structured_logging import log_with_context
+    
+    try:
+        # Per aiohttp, request.json() è una coroutine
+        if hasattr(request, 'json') and callable(getattr(request, 'json', None)):
+            # Verifica se è coroutine
+            import inspect
+            if inspect.iscoroutinefunction(request.json):
+                data = await request.json()
+            else:
+                data = request.json()
+        else:
+            # Fallback per mock request
+            data = getattr(request, '_json_data', {})
+        
+        telegram_id = data.get('telegram_id')
+        viewer_url = data.get('viewer_url')
+        correlation_id = data.get('correlation_id')
+        
+        log_with_context(
+            "info",
+            f"[VIEWER_CALLBACK] Link ricevuto dal viewer: telegram_id={telegram_id}, "
+            f"viewer_url={viewer_url[:100]}..., correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        if not telegram_id or not viewer_url:
+            log_with_context(
+                "warning",
+                f"[VIEWER_CALLBACK] Dati mancanti: telegram_id={telegram_id}, viewer_url={bool(viewer_url)}",
+                telegram_id=telegram_id if telegram_id else 0,
+                correlation_id=correlation_id
+            )
+            return web.Response(
+                json={"status": "error", "message": "telegram_id e viewer_url richiesti"},
+                status=400
+            )
+        
+        # Recupera context utente per inviare messaggio
+        # Usa user_data per salvare link e inviarlo quando pronto
+        # Per ora, cerchiamo di inviare direttamente se possibile
+        # TODO: Gestire meglio il caso in cui l'utente non è nella sessione
+        
+        log_with_context(
+            "info",
+            f"[VIEWER_CALLBACK] Link pronto per telegram_id={telegram_id}, "
+            f"correlation_id={correlation_id}. Invio messaggio...",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id
+        )
+        
+        # Invia messaggio all'utente
+        try:
+            from telegram import Bot
+            bot_instance = Bot(token=TELEGRAM_BOT_TOKEN)
+            
+            # Costruisci messaggio
+            message = (
+                f"🌐 **Link Visualizzazione Inventario**\n\n"
+                f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+                f"🔗 {viewer_url}\n\n"
+                f"⏰ **Validità:** 1 ora\n"
+                f"💡 Se il link scade, usa `/view` per generarne uno nuovo."
+            )
+            
+            await bot_instance.send_message(
+                chat_id=telegram_id,
+                text=message,
+                parse_mode='Markdown'
+            )
+            
+            log_with_context(
+                "info",
+                f"[VIEWER_CALLBACK] Messaggio inviato con successo a telegram_id={telegram_id}, "
+                f"correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
+            )
+            
+        except Exception as send_error:
+            log_with_context(
+                "error",
+                f"[VIEWER_CALLBACK] Errore invio messaggio: {send_error}, "
+                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id,
+                exc_info=True
+            )
+            # Non fallire completamente, ritorna successo comunque
+            # Il viewer ha fatto il suo lavoro
+        
+        return web.Response(
+            json={"status": "success", "message": "Link inviato all'utente"},
+            status=200
+        )
+        
+    except Exception as e:
+        logger.error(f"[VIEWER_CALLBACK] Errore gestione callback: {e}", exc_info=True)
+        return web.Response(
+            json={"status": "error", "message": str(e)},
+            status=500
+        )
+
+
 
 
 def _start_health_server(port: int) -> None:
     # Avvia un piccolo server HTTP in un thread separato sulla porta di Railway
     import threading
+    import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/healthcheck":
+            parsed_path = urlparse(self.path)
+            if parsed_path.path == "/healthcheck":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.end_headers()
@@ -1051,6 +1219,67 @@ def _start_health_server(port: int) -> None:
             else:
                 self.send_response(404)
                 self.end_headers()
+        
+        def do_POST(self):
+            """Gestisci POST per /api/viewer/link-ready"""
+            import asyncio
+            from urllib.parse import urlparse
+            
+            parsed_path = urlparse(self.path)
+            if parsed_path.path == "/api/viewer/link-ready":
+                try:
+                    # Leggi body JSON
+                    content_length = int(self.headers.get('Content-Length', 0))
+                    if content_length == 0:
+                        self.send_error(400, "Body vuoto")
+                        return
+                    
+                    body = self.rfile.read(content_length)
+                    data = json.loads(body.decode('utf-8'))
+                    
+                    # Esegui handler asincrono direttamente
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        # Crea mock request per viewer_link_ready_handler
+                        class MockRequest:
+                            def __init__(self, json_data):
+                                self._json_data = json_data
+                            async def json(self):
+                                return self._json_data
+                        
+                        mock_request = MockRequest(data)
+                        
+                        # Chiama handler
+                        result = loop.run_until_complete(viewer_link_ready_handler(mock_request))
+                        
+                        # Estrai risposta
+                        if isinstance(result, web.Response):
+                            self.send_response(result.status)
+                            self.send_header('Content-Type', 'application/json')
+                            self.end_headers()
+                            # web.Response ha text o body
+                            if hasattr(result, 'text'):
+                                body_text = result.text
+                            elif hasattr(result, 'body'):
+                                body_text = result.body.decode('utf-8') if isinstance(result.body, bytes) else str(result.body)
+                            else:
+                                body_text = '{"status":"ok"}'
+                            self.wfile.write(body_text.encode('utf-8') if isinstance(body_text, str) else body_text)
+                        else:
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'application/json')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"status": "success"}).encode('utf-8'))
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    logger.error(f"Errore gestione POST /api/viewer/link-ready: {e}", exc_info=True)
+                    self.send_error(500, f"Internal server error: {e}")
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
         def log_message(self, format, *args):
             return  # silenzia il logging di BaseHTTPRequestHandler
 
