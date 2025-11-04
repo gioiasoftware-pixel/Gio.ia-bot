@@ -18,7 +18,7 @@ PORT = int(os.getenv("PORT", 8000))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Processor Microservice
-PROCESSOR_URL = os.getenv("PROCESSOR_URL", "http://localhost:8001")
+PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
 
 # Viewer Microservice
 VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
