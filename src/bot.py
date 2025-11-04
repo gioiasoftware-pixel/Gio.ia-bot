@@ -380,20 +380,15 @@ async def view_cmd(update, context):
             await asyncio.wait_for(viewer_event.wait(), timeout=60.0)
             
             # Recupera il link dal dict
-            pending_data = _viewer_pending_requests.get(telegram_id)
-            if pending_data and pending_data.get('viewer_url'):
-                viewer_url = pending_data['viewer_url']
-                
-                log_with_context(
-                    "info",
-                    f"[VIEW] Link ricevuto, invio messaggio all'utente, telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id
-                )
-                
-                # Aggiorna messaggio con il link
-                message = (
+            async with _viewer_pending_lock:
+                pending_data = _viewer_pending_requests.get(telegram_id)
+                viewer_url = pending_data.get('viewer_url') if pending_data else None
+                # Rimuovi dalla cache
+                _viewer_pending_requests.pop(telegram_id, None)
+            
+            if viewer_url:
+                # Modifica il messaggio con il link
+                final_message = (
                     f"🌐 **Link Visualizzazione Inventario**\n\n"
                     f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
                     f"🔗 {viewer_url}\n\n"
@@ -402,7 +397,7 @@ async def view_cmd(update, context):
                     f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
                 )
                 
-                await loading_message.edit_text(message, parse_mode='Markdown')
+                await loading_message.edit_text(final_message, parse_mode='Markdown')
                 
                 log_with_context(
                     "info",
@@ -412,39 +407,56 @@ async def view_cmd(update, context):
                     correlation_id=correlation_id
                 )
             else:
-                raise Exception("Link non disponibile dopo attesa")
+                # Timeout o errore
+                await loading_message.edit_text(
+                    "❌ **Timeout generazione link**\n\n"
+                    "Il link non è stato generato entro il tempo previsto.\n"
+                    "Riprova con `/view`.",
+                    parse_mode='Markdown'
+                )
+                
+                log_with_context(
+                    "warning",
+                    f"[VIEW] Timeout attesa link (nessun URL), telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id
+                )
                 
         except asyncio.TimeoutError:
-            log_with_context(
-                "error",
-                f"[VIEW] Timeout attesa link dal viewer (60s), telegram_id={telegram_id}, "
-                f"correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
+            # Timeout
+            async with _viewer_pending_lock:
+                _viewer_pending_requests.pop(telegram_id, None)
             
             await loading_message.edit_text(
                 "❌ **Timeout generazione link**\n\n"
-                "Il link non è stato generato in tempo.\n"
+                "Il link non è stato generato entro 60 secondi.\n"
                 "Riprova con `/view`.",
                 parse_mode='Markdown'
             )
-        except Exception as e:
-            log_with_context(
-                "error",
-                f"[VIEW] Errore attesa link: {e}, telegram_id={telegram_id}, correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id,
-                exc_info=True
-            )
             
-            await loading_message.edit_text(
-                "❌ **Errore generazione link**\n\n"
-                "Riprova più tardi con `/view`.",
-                parse_mode='Markdown'
+            log_with_context(
+                "warning",
+                f"[VIEW] Timeout attesa link (60s), telegram_id={telegram_id}, correlation_id={correlation_id}",
+                telegram_id=telegram_id,
+                correlation_id=correlation_id
             )
-        finally:
-            # Pulisci dict
+        
+    except Exception as e:
+        log_with_context(
+            "error",
+            f"[VIEW] Errore comando /view: {e}, correlation_id={correlation_id}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id,
+            exc_info=True
+        )
+        await update.message.reply_text(
+            "❌ **Errore generazione link**\n\n"
+            "Riprova più tardi."
+        )
+        
+        # Pulisci cache in caso di errore
+        async with _viewer_pending_lock:
             _viewer_pending_requests.pop(telegram_id, None)
         
     except Exception as e:
@@ -1239,33 +1251,46 @@ async def viewer_link_ready_handler(request):
                 status=400
             )
         
-        # Recupera context utente per inviare messaggio
-        # Usa user_data per salvare link e inviarlo quando pronto
-        # Per ora, cerchiamo di inviare direttamente se possibile
-        # TODO: Gestire meglio il caso in cui l'utente non è nella sessione
-        
         log_with_context(
             "info",
             f"[VIEWER_CALLBACK] Link pronto per telegram_id={telegram_id}, "
-            f"correlation_id={correlation_id}. Sveglio task in attesa...",
+            f"correlation_id={correlation_id}. Sveglio evento...",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
         
-        # Sveglia il task in attesa nel view_cmd
-        pending_data = _viewer_pending_requests.get(telegram_id)
-        if pending_data:
-            # Salva il link e sveglia l'evento
-            pending_data['viewer_url'] = viewer_url
-            pending_data['event'].set()
-            
-            log_with_context(
-                "info",
-                f"[VIEWER_CALLBACK] Event impostato, task in attesa svegliato, telegram_id={telegram_id}, "
-                f"correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
+        # Sveglia l'evento per il comando /view in attesa
+        async with _viewer_pending_lock:
+            pending_data = _viewer_pending_requests.get(telegram_id)
+            if pending_data:
+                # Aggiorna il link e sveglia l'evento
+                pending_data['viewer_url'] = viewer_url
+                event = pending_data.get('event')
+                if event:
+                    event.set()
+                    log_with_context(
+                        "info",
+                        f"[VIEWER_CALLBACK] Event svegliato per telegram_id={telegram_id}, "
+                        f"correlation_id={correlation_id}",
+                        telegram_id=telegram_id,
+                        correlation_id=correlation_id
+                    )
+                else:
+                    log_with_context(
+                        "warning",
+                        f"[VIEWER_CALLBACK] Nessun evento trovato per telegram_id={telegram_id}, "
+                        f"correlation_id={correlation_id}",
+                        telegram_id=telegram_id,
+                        correlation_id=correlation_id
+                    )
+            else:
+                log_with_context(
+                    "warning",
+                    f"[VIEWER_CALLBACK] Nessuna richiesta in attesa per telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}",
+                    telegram_id=telegram_id,
+                    correlation_id=correlation_id
+                )
         else:
             log_with_context(
                 "warning",
