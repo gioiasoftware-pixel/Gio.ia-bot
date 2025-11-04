@@ -35,35 +35,58 @@ async def check_rate_limit(
             
             # Crea tabella se non esiste (auto-migration)
             try:
-                create_table_query = sql_text("""
-                    CREATE TABLE IF NOT EXISTS rate_limit_logs (
-                        id SERIAL PRIMARY KEY,
-                        telegram_id BIGINT NOT NULL,
-                        action_type TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        INDEX idx_rate_limit_user_action (telegram_id, action_type, created_at)
+                # Prima verifica se la tabella esiste
+                check_table_query = sql_text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'rate_limit_logs'
                     )
                 """)
-                await session.execute(create_table_query)
-                await session.commit()
-            except Exception as create_error:
-                # Se fallisce, prova con sintassi PostgreSQL standard
-                try:
+                result = await session.execute(check_table_query)
+                table_exists = result.scalar()
+                
+                if not table_exists:
+                    # Crea tabella
                     create_table_query = sql_text("""
-                        CREATE TABLE IF NOT EXISTS rate_limit_logs (
+                        CREATE TABLE rate_limit_logs (
                             id SERIAL PRIMARY KEY,
                             telegram_id BIGINT NOT NULL,
                             action_type TEXT NOT NULL,
                             created_at TIMESTAMP DEFAULT NOW()
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_rate_limit_user_action 
-                        ON rate_limit_logs (telegram_id, action_type, created_at);
+                        )
                     """)
                     await session.execute(create_table_query)
+                    
+                    # Crea indice
+                    create_index_query = sql_text("""
+                        CREATE INDEX idx_rate_limit_user_action 
+                        ON rate_limit_logs (telegram_id, action_type, created_at)
+                    """)
+                    await session.execute(create_index_query)
                     await session.commit()
-                except Exception:
-                    # Se ancora fallisce, passa (fail open)
-                    logger.warning(f"[RATE_LIMIT] Impossibile creare tabella: {create_error}")
+                else:
+                    # Verifica se la colonna action_type esiste
+                    check_column_query = sql_text("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.columns 
+                            WHERE table_name = 'rate_limit_logs' 
+                            AND column_name = 'action_type'
+                        )
+                    """)
+                    result = await session.execute(check_column_query)
+                    column_exists = result.scalar()
+                    
+                    if not column_exists:
+                        # Aggiungi colonna action_type
+                        alter_table_query = sql_text("""
+                            ALTER TABLE rate_limit_logs 
+                            ADD COLUMN action_type TEXT NOT NULL DEFAULT 'message'
+                        """)
+                        await session.execute(alter_table_query)
+                        await session.commit()
+            except Exception as create_error:
+                # Se fallisce, passa (fail open)
+                logger.warning(f"[RATE_LIMIT] Impossibile creare/aggiornare tabella: {create_error}")
             
             # Calcola timestamp finestra
             window_start = datetime.utcnow() - timedelta(seconds=window_seconds)
