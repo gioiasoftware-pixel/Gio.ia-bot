@@ -37,42 +37,113 @@ if not TELEGRAM_BOT_TOKEN:
 
 
 async def start_cmd(update, context):
+    """Gestisce il comando /start con gestione errori completa."""
     user = update.effective_user
     username = user.username or user.first_name or "Utente"
     telegram_id = user.id
     
     logger.info(f"Comando /start da: {username} (ID: {telegram_id})")
     
-    # Verifica disponibilità database
-    if not DATABASE_AVAILABLE:
-        await update.message.reply_text(
-            "⚠️ **Database non disponibile**\n\n"
-            "Il sistema è temporaneamente in manutenzione.\n"
-            "Riprova tra qualche minuto."
+    try:
+        # Verifica disponibilità database
+        if not DATABASE_AVAILABLE:
+            await update.message.reply_text(
+                "⚠️ **Database non disponibile**\n\n"
+                "Il sistema è temporaneamente in manutenzione.\n"
+                "Riprova tra qualche minuto."
+            )
+            return
+        
+        # Verifica se l'onboarding è completato - ASYNC (con error handling)
+        try:
+            is_complete = await new_onboarding_manager.is_onboarding_complete(telegram_id)
+        except Exception as onboarding_check_error:
+            logger.error(
+                f"Errore verifica onboarding per {telegram_id}: {onboarding_check_error}",
+                exc_info=True
+            )
+            # Assumiamo che l'onboarding non sia completato e procediamo
+            is_complete = False
+        
+        if not is_complete:
+            # Avvia nuovo onboarding (con error handling)
+            try:
+                await new_onboarding_manager.start_new_onboarding(update, context)
+            except Exception as onboarding_error:
+                logger.error(
+                    f"Errore avvio onboarding per {telegram_id}: {onboarding_error}",
+                    exc_info=True
+                )
+                await update.message.reply_text(
+                    "⚠️ **Errore durante l'onboarding**\n\n"
+                    "Si è verificato un errore. Riprova tra qualche istante.\n"
+                    "Se il problema persiste, contatta il supporto."
+                )
+        else:
+            # Onboarding già completato - ASYNC (con error handling)
+            try:
+                from .database_async import async_db_manager
+                user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                
+                # BUG #3 FIX: Verifica che user_data non sia None
+                if user_data is None:
+                    logger.warning(f"User {telegram_id} non trovato nel database, avvio onboarding")
+                    # Se user non esiste, avvia onboarding
+                    try:
+                        await new_onboarding_manager.start_new_onboarding(update, context)
+                    except Exception as onboarding_error:
+                        logger.error(
+                            f"Errore avvio onboarding per {telegram_id}: {onboarding_error}",
+                            exc_info=True
+                        )
+                        await update.message.reply_text(
+                            "⚠️ **Errore durante l'onboarding**\n\n"
+                            "Si è verificato un errore. Riprova tra qualche istante."
+                        )
+                    return
+                
+                # BUG #3 FIX: Verifica che business_name esista
+                business_name = user_data.business_name if hasattr(user_data, 'business_name') and user_data.business_name else "Il tuo locale"
+                
+                welcome_text = (
+                    f"Bentornato {username}! 👋\n\n"
+                    f"🏢 **{business_name}**\n\n"
+                    "🤖 **Gio.ia-bot** è pronto ad aiutarti con:\n"
+                    "• 📦 Gestione inventario vini\n"
+                    "• 📊 Report e statistiche\n"
+                    "• 💡 Consigli personalizzati\n\n"
+                    "💬 **Comunica i movimenti:**\n"
+                    "• 'Ho venduto 2 bottiglie di Chianti'\n"
+                    "• 'Ho ricevuto 10 bottiglie di Barolo'\n\n"
+                    "📋 Usa /help per tutti i comandi!"
+                )
+                await update.message.reply_text(welcome_text, parse_mode='Markdown')
+                
+            except Exception as db_error:
+                logger.error(
+                    f"Errore database durante /start per {telegram_id}: {db_error}",
+                    exc_info=True
+                )
+                await update.message.reply_text(
+                    "⚠️ **Errore di connessione**\n\n"
+                    "Si è verificato un errore di connessione al database.\n"
+                    "Riprova tra qualche minuto."
+                )
+                
+    except Exception as e:
+        # BUG #2 FIX: Cattura tutte le eccezioni non previste
+        logger.error(
+            f"Errore critico in start_cmd per {telegram_id}: {e}",
+            exc_info=True
         )
-        return
-    
-    # Verifica se l'onboarding è completato - ASYNC
-    if not await new_onboarding_manager.is_onboarding_complete(telegram_id):
-        # Avvia nuovo onboarding
-        await new_onboarding_manager.start_new_onboarding(update, context)
-    else:
-        # Onboarding già completato - ASYNC
-        from .database_async import async_db_manager
-        user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
-        welcome_text = (
-            f"Bentornato {username}! 👋\n\n"
-            f"🏢 **{user_data.business_name}**\n\n"
-            "🤖 **Gio.ia-bot** è pronto ad aiutarti con:\n"
-            "• 📦 Gestione inventario vini\n"
-            "• 📊 Report e statistiche\n"
-            "• 💡 Consigli personalizzati\n\n"
-            "💬 **Comunica i movimenti:**\n"
-            "• 'Ho venduto 2 bottiglie di Chianti'\n"
-            "• 'Ho ricevuto 10 bottiglie di Barolo'\n\n"
-            "📋 Usa /help per tutti i comandi!"
-        )
-        await update.message.reply_text(welcome_text, parse_mode='Markdown')
+        try:
+            await update.message.reply_text(
+                "⚠️ **Errore**\n\n"
+                "Si è verificato un errore imprevisto.\n"
+                "Riprova tra qualche istante o contatta il supporto."
+            )
+        except Exception as reply_error:
+            logger.error(f"Errore anche nell'invio messaggio errore: {reply_error}")
 
 
 async def testai_cmd(update, context):
@@ -1457,6 +1528,25 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document_with_onboarding))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_onboarding))
     logger.info("✅ Tutti gli handlers registrati")
+    
+    # BUG #2 FIX: Error handler per catturare tutte le eccezioni non gestite
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce errori non catturati dagli handler."""
+        logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
+        
+        # Prova a inviare messaggio errore se update è valido
+        if update and hasattr(update, 'effective_message') and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "⚠️ **Errore**\n\n"
+                    "Si è verificato un errore imprevisto.\n"
+                    "Riprova tra qualche istante."
+                )
+            except Exception as reply_error:
+                logger.error(f"Errore invio messaggio errore: {reply_error}")
+    
+    app.add_error_handler(error_handler)
+    logger.info("✅ Error handler registrato")
 
     # Su Railway usiamo polling + server HTTP per healthcheck sulla PORT
     use_polling_with_health = os.getenv("RAILWAY_ENVIRONMENT") is not None or BOT_MODE != "webhook"
