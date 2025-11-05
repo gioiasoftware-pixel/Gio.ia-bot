@@ -1474,44 +1474,81 @@ def main():
             logger.error(f"❌ Errore avvio health server: {e}", exc_info=True)
         
         # IMPORTANTE: Elimina webhook prima di avviare polling (evita Conflict)
+        logger.info("🔧 Eliminazione webhook esistente (se presente)...")
         try:
-            logger.info("🔧 Eliminazione webhook esistente (se presente)...")
-            # delete_webhook è async, ma siamo in contesto sincrono
-            # Usa asyncio.run per eseguire l'async delete_webhook
+            # Inizializza il bot se non già inizializzato
             import asyncio
+            async def _delete_webhook():
+                try:
+                    # Inizializza il bot se necessario
+                    if not app.bot.initialized:
+                        await app.bot.initialize()
+                    # Elimina webhook
+                    await app.bot.delete_webhook(drop_pending_updates=True)
+                    logger.info("✅ Webhook eliminato (se presente)")
+                    return True
+                except Exception as e:
+                    logger.warning(f"⚠️ Errore eliminazione webhook: {e}")
+                    return False
+            
+            # Esegui in modo sincrono
             try:
                 # Prova a ottenere il loop corrente
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Loop già in esecuzione - non possiamo usare run()
-                    logger.warning("⚠️ Loop asyncio già in esecuzione, skip eliminazione webhook")
+                    # Loop già in esecuzione - crea un task futuro
+                    logger.warning("⚠️ Loop asyncio già in esecuzione, elimino webhook dopo...")
+                    # Non possiamo eliminare il webhook ora, ma lo faremo dopo
                 else:
                     # Loop non in esecuzione - possiamo usare run()
-                    asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
-                    logger.info("✅ Webhook eliminato (se presente)")
-                    import time
-                    time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
+                    result = asyncio.run(_delete_webhook())
+                    if result:
+                        import time
+                        time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
             except RuntimeError:
                 # Nessun loop esistente - possiamo creare uno nuovo
-                asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
-                logger.info("✅ Webhook eliminato (se presente)")
-                import time
-                time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
+                result = asyncio.run(_delete_webhook())
+                if result:
+                    import time
+                    time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
         except Exception as e:
-            logger.warning(f"⚠️ Errore eliminazione webhook (potrebbe non esistere): {e}")
+            logger.error(f"❌ Errore critico eliminazione webhook: {e}", exc_info=True)
         
         # Avvia il polling (bloccante) con gestione conflitti
+        # run_polling() dovrebbe eliminare automaticamente il webhook, ma facciamo retry se necessario
         max_retries = 3
         retry_count = 0
+        import time
+        
         while retry_count < max_retries:
             try:
                 if retry_count > 0:
                     logger.info(f"🔄 Tentativo {retry_count + 1}/{max_retries} di avvio polling...")
-                    import time
-                    time.sleep(5)  # Attendi 5 secondi tra i tentativi
+                    # Tra un tentativo e l'altro, prova di nuovo a eliminare il webhook
+                    try:
+                        import asyncio
+                        async def _delete_webhook_retry():
+                            if not app.bot.initialized:
+                                await app.bot.initialize()
+                            await app.bot.delete_webhook(drop_pending_updates=True)
+                            logger.info("✅ Webhook eliminato al retry")
+                        
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if not loop.is_running():
+                                asyncio.run(_delete_webhook_retry())
+                                time.sleep(3)
+                        except RuntimeError:
+                            asyncio.run(_delete_webhook_retry())
+                            time.sleep(3)
+                    except Exception as e2:
+                        logger.warning(f"⚠️ Errore eliminazione webhook al retry: {e2}")
+                    else:
+                        time.sleep(5)  # Attendi 5 secondi tra i tentativi
                 else:
                     logger.info("🔄 Avvio polling...")
                 
+                # run_polling() elimina automaticamente il webhook se presente
                 app.run_polling(
                     allowed_updates=["message", "callback_query"],
                     drop_pending_updates=True
@@ -1521,31 +1558,17 @@ def main():
             except Exception as e:
                 error_msg = str(e)
                 if "Conflict" in error_msg or "terminated by other getUpdates" in error_msg:
-                    logger.error(f"❌ Conflict: un'altra istanza sta già facendo polling")
-                    logger.info("🔧 Tentativo eliminazione webhook e riprovo...")
-                    try:
-                        # Prova di nuovo a eliminare il webhook
-                        import asyncio
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if loop.is_running():
-                                logger.warning("⚠️ Loop asyncio già in esecuzione, skip eliminazione webhook")
-                            else:
-                                asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
-                                import time
-                                time.sleep(3)
-                        except RuntimeError:
-                            asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
-                            import time
-                            time.sleep(3)
-                    except Exception as e2:
-                        logger.warning(f"⚠️ Errore eliminazione webhook: {e2}")
+                    logger.error(f"❌ Conflict: un'altra istanza sta già facendo polling (tentativo {retry_count + 1}/{max_retries})")
+                    
+                    if retry_count < max_retries - 1:
+                        logger.info("🔧 Attendo e riprovo...")
+                    else:
+                        logger.error(f"❌ Impossibile avviare polling dopo {max_retries} tentativi")
+                        logger.error("⚠️ VERIFICA: C'è un'altra istanza del bot in esecuzione su Railway?")
+                        logger.error("⚠️ SOLUZIONE: Ferma tutte le istanze del bot e riavvia una sola")
+                        raise
                     
                     retry_count += 1
-                    if retry_count >= max_retries:
-                        logger.error(f"❌ Impossibile avviare polling dopo {max_retries} tentativi")
-                        logger.error("⚠️ Verifica che non ci siano altre istanze del bot in esecuzione")
-                        raise
                 else:
                     logger.error(f"❌ Errore polling: {e}", exc_info=True)
                     raise  # Rilancia errori non-Conflict
