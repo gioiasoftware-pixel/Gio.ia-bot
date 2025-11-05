@@ -33,13 +33,19 @@ async def enqueue_admin_notification(
         
         # Inserisci nella tabella admin_notifications
         async with await get_async_session() as session:
-            # Usa SQLAlchemy per inserire
+            # Usa SQLAlchemy per inserire - PostgreSQL converte automaticamente TEXT a JSONB
             from sqlalchemy import text as sql_text
+            import json
             
-            query = sql_text("""
+            # Escape del JSON per sicurezza (sostituisci singoli apici)
+            payload_json_escaped = payload_json.replace("'", "''")
+            
+            # Usa query con literal JSONB - asyncpg non supporta cast esplicito in prepared statements
+            # Quindi inseriamo il JSON come stringa letterale e facciamo cast nel SQL
+            query = sql_text(f"""
                 INSERT INTO admin_notifications 
                 (event_type, telegram_id, correlation_id, payload, status)
-                VALUES (:event_type, :telegram_id, :correlation_id, :payload::jsonb, 'pending')
+                VALUES (:event_type, :telegram_id, :correlation_id, '{payload_json_escaped}'::jsonb, 'pending')
             """)
             
             await session.execute(
@@ -47,8 +53,7 @@ async def enqueue_admin_notification(
                 {
                     "event_type": event_type,
                     "telegram_id": telegram_id,
-                    "correlation_id": correlation_id,
-                    "payload": payload_json
+                    "correlation_id": correlation_id
                 }
             )
             await session.commit()
