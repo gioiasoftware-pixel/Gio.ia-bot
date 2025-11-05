@@ -1474,45 +1474,35 @@ def main():
             logger.error(f"❌ Errore avvio health server: {e}", exc_info=True)
         
         # IMPORTANTE: Elimina webhook prima di avviare polling (evita Conflict)
+        # Usa chiamata HTTP diretta all'API Telegram (più affidabile)
         logger.info("🔧 Eliminazione webhook esistente (se presente)...")
         try:
-            # Inizializza il bot se non già inizializzato
-            import asyncio
-            async def _delete_webhook():
-                try:
-                    # Inizializza il bot se necessario
-                    if not app.bot.initialized:
-                        await app.bot.initialize()
-                    # Elimina webhook
-                    await app.bot.delete_webhook(drop_pending_updates=True)
-                    logger.info("✅ Webhook eliminato (se presente)")
-                    return True
-                except Exception as e:
-                    logger.warning(f"⚠️ Errore eliminazione webhook: {e}")
-                    return False
+            import urllib.request
+            import json
+            import time
             
-            # Esegui in modo sincrono
-            try:
-                # Prova a ottenere il loop corrente
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Loop già in esecuzione - crea un task futuro
-                    logger.warning("⚠️ Loop asyncio già in esecuzione, elimino webhook dopo...")
-                    # Non possiamo eliminare il webhook ora, ma lo faremo dopo
-                else:
-                    # Loop non in esecuzione - possiamo usare run()
-                    result = asyncio.run(_delete_webhook())
-                    if result:
-                        import time
-                        time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
-            except RuntimeError:
-                # Nessun loop esistente - possiamo creare uno nuovo
-                result = asyncio.run(_delete_webhook())
-                if result:
-                    import time
+            # Chiama direttamente l'API Telegram per eliminare il webhook
+            api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+            
+            logger.info(f"📡 Chiamata API: {api_url[:50]}...")
+            request = urllib.request.Request(api_url, method='POST')
+            
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = json.loads(response.read().decode())
+                
+                if result.get('ok'):
+                    logger.info("✅ Webhook eliminato con successo via API")
                     time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
+                else:
+                    description = result.get('description', 'Unknown error')
+                    logger.warning(f"⚠️ Risposta API: {description}")
+                    if 'webhook is not set' in description.lower():
+                        logger.info("ℹ️ Nessun webhook presente (OK)")
+                    else:
+                        logger.warning(f"⚠️ Possibile errore eliminazione webhook: {description}")
         except Exception as e:
-            logger.error(f"❌ Errore critico eliminazione webhook: {e}", exc_info=True)
+            logger.error(f"❌ Errore eliminazione webhook via API: {e}", exc_info=True)
+            logger.warning("⚠️ Continuo comunque con l'avvio polling...")
         
         # Avvia il polling (bloccante) con gestione conflitti
         # run_polling() dovrebbe eliminare automaticamente il webhook, ma facciamo retry se necessario
