@@ -1402,24 +1402,39 @@ def _start_health_server(port: int) -> None:
 
 
 def main():
-    # Configurazione bot senza parametri non supportati
-    builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
+    logger.info("=" * 50)
+    logger.info("🚀 AVVIO BOT - Inizializzazione...")
+    logger.info(f"TELEGRAM_BOT_TOKEN: {'✅ Presente' if TELEGRAM_BOT_TOKEN else '❌ MANCANTE'}")
+    logger.info(f"BOT_MODE: {BOT_MODE}")
+    logger.info(f"PORT: {PORT}")
+    logger.info("=" * 50)
     
-    # Rimuovi eventuali parametri proxy se presenti
+    # Configurazione bot senza parametri non supportati
     try:
+        logger.info("🔧 Creazione Application builder...")
+        builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
+        logger.info("✅ Builder creato")
+        
+        logger.info("🔧 Building Application...")
         app = builder.build()
+        logger.info("✅ Application build completato")
     except Exception as e:
-        logger.error(f"Errore configurazione bot: {e}")
+        logger.error(f"❌ Errore configurazione bot: {e}", exc_info=True)
         # Fallback con configurazione minima
+        logger.info("🔄 Tentativo fallback con configurazione minima...")
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        logger.info("✅ Fallback completato")
     
     # Comandi base
+    logger.info("📝 Registrazione handlers...")
     app.add_handler(CommandHandler("start", start_cmd))
+    logger.info("✅ Handler /start registrato")
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("view", view_cmd))
     app.add_handler(CommandHandler("testai", testai_cmd))
     app.add_handler(CommandHandler("testprocessor", testprocessor_cmd))
     app.add_handler(CommandHandler("deletewebhook", deletewebhook_cmd))
+    logger.info("✅ Altri comandi base registrati")
     
     # Comandi inventario
     app.add_handler(CommandHandler("inventario", inventario_cmd))
@@ -1427,6 +1442,7 @@ def main():
     app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("scorte", scorte_cmd))
     app.add_handler(CommandHandler("log", log_cmd))
+    logger.info("✅ Comandi inventario registrati")
     
     # Comando admin (solo per 927230913)
     app.add_handler(CommandHandler("cancellaschema", cancella_schema_cmd))
@@ -1440,30 +1456,51 @@ def main():
     # File handlers
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document_with_onboarding))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_onboarding))
+    logger.info("✅ Tutti gli handlers registrati")
 
     # Su Railway usiamo polling + server HTTP per healthcheck sulla PORT
     use_polling_with_health = os.getenv("RAILWAY_ENVIRONMENT") is not None or BOT_MODE != "webhook"
+    logger.info(f"🔍 use_polling_with_health: {use_polling_with_health}")
+    logger.info(f"🔍 RAILWAY_ENVIRONMENT: {os.getenv('RAILWAY_ENVIRONMENT')}")
+    logger.info(f"🔍 BOT_MODE: {BOT_MODE}")
+    
     if use_polling_with_health:
-        logger.info(f"Starting health server + polling on 0.0.0.0:{PORT}")
+        logger.info(f"📡 Starting health server + polling on 0.0.0.0:{PORT}")
         # Avvia server health (thread daemon) e poi polling
-        _start_health_server(PORT)
+        try:
+            _start_health_server(PORT)
+            logger.info("✅ Health server avviato")
+        except Exception as e:
+            logger.error(f"❌ Errore avvio health server: {e}", exc_info=True)
+        
         # Avvia il polling (bloccante) con gestione conflitti
         try:
+            logger.info("🔄 Avvio polling...")
             app.run_polling(
                 allowed_updates=["message", "callback_query"],
                 drop_pending_updates=True
             )
+            logger.info("✅ Polling avviato con successo")
         except Exception as e:
-            logger.error(f"Errore polling: {e}")
-            logger.info("Riprovo polling in 5 secondi...")
+            logger.error(f"❌ Errore polling: {e}", exc_info=True)
+            logger.info("🔄 Riprovo polling in 5 secondi...")
             import time
             time.sleep(5)
-            app.run_polling(drop_pending_updates=True)
+            try:
+                app.run_polling(drop_pending_updates=True)
+                logger.info("✅ Polling riavviato con successo")
+            except Exception as e2:
+                logger.error(f"❌ Errore polling al secondo tentativo: {e2}", exc_info=True)
         return
 
     # Modalità webhook classica (senza health server, non compatibile su PTB 21.5)
-    logger.info("Starting bot in webhook mode (senza healthcheck HTTP)")
-    app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=WEBHOOK_URL)
+    logger.info("📡 Starting bot in webhook mode (senza healthcheck HTTP)")
+    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
+    try:
+        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=WEBHOOK_URL)
+        logger.info("✅ Webhook avviato con successo")
+    except Exception as e:
+        logger.error(f"❌ Errore avvio webhook: {e}", exc_info=True)
 
 if __name__ == "__main__":
     main()
