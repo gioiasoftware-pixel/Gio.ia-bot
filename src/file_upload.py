@@ -280,11 +280,15 @@ class FileUploadManager:
             except:
                 pass
             
-            if result.get('status') == 'success':
-                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
-                total_wines = result.get('total_wines', 0)
-                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result.get('error_count', 0)      # Solo errori critici
+            # Estrai dati dal campo 'result' annidato se presente, altrimenti usa result direttamente
+            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
+            result_data = result.get('result', result) if result.get('status') == 'completed' else result
+            
+            if result_data.get('status') == 'success':
+                saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
+                total_wines = result_data.get('total_wines', 0)
+                warning_count = result_data.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result_data.get('error_count', 0)      # Solo errori critici
                 
                 # Messaggio base
                 if error_count > 0:
@@ -334,7 +338,9 @@ class FileUploadManager:
                     )
                     logger.info(f"Onboarding completato automaticamente dopo upload inventario per {telegram_id}/{business_name}")
             else:
-                error_msg = result.get('error', 'Errore sconosciuto')
+                # Usa result_data se disponibile, altrimenti result
+                error_source = result_data if 'result_data' in locals() else result
+                error_msg = error_source.get('error', result.get('error', 'Errore sconosciuto'))
                 if not error_msg or error_msg == '...':
                     error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
                 
@@ -482,11 +488,15 @@ class FileUploadManager:
             except:
                 pass
             
-            if result.get('status') == 'success':
-                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
-                total_wines = result.get('total_wines', 0)
-                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result.get('error_count', 0)      # Solo errori critici
+            # Estrai dati dal campo 'result' annidato se presente, altrimenti usa result direttamente
+            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
+            result_data = result.get('result', result) if result.get('status') == 'completed' else result
+            
+            if result_data.get('status') == 'success':
+                saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
+                total_wines = result_data.get('total_wines', 0)
+                warning_count = result_data.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result_data.get('error_count', 0)      # Solo errori critici
                 
                 # Messaggio base
                 if error_count > 0:
@@ -535,7 +545,9 @@ class FileUploadManager:
                     )
                     logger.info(f"Onboarding completato automaticamente dopo upload OCR per {telegram_id}/{business_name}")
             else:
-                error_msg = result.get('error', 'Errore sconosciuto')
+                # Usa result_data se disponibile, altrimenti result
+                error_source = result_data if 'result_data' in locals() else result
+                error_msg = error_source.get('error', result.get('error', 'Errore sconosciuto'))
                 if not error_msg or error_msg == '...':
                     error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
                 

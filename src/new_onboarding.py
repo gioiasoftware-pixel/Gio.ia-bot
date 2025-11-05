@@ -545,10 +545,14 @@ class NewOnboardingManager:
                 poll_interval=30  # Poll ogni 30 secondi
             )
             
-            if result.get('status') == 'success':
-                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
-                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result.get('error_count', 0)      # Solo errori critici
+            # Estrai dati dal campo 'result' annidato se presente, altrimenti usa result direttamente
+            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
+            result_data = result.get('result', result) if result.get('status') == 'completed' else result
+            
+            if result_data.get('status') == 'success':
+                saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
+                warning_count = result_data.get('warning_count', 0)  # Separato: solo warnings
+                error_count = result_data.get('error_count', 0)      # Solo errori critici
                 
                 logger.info(f"✅ Inventario elaborato: {saved_wines} vini salvati")
                 if warning_count > 0:
@@ -576,7 +580,9 @@ class NewOnboardingManager:
                         f"Riprova o contatta il supporto se il problema persiste."
                     )
             else:
-                error_msg = result.get('error', 'Errore sconosciuto')
+                # Usa result_data se disponibile, altrimenti result
+                error_source = result_data if 'result_data' in locals() else result
+                error_msg = error_source.get('error', result.get('error', 'Errore sconosciuto'))
                 logger.error(f"❌ Errore processor: {error_msg}")
                 await update.message.reply_text(
                     f"⚠️ **Errore elaborazione inventario**\n\n"
