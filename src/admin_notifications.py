@@ -35,7 +35,6 @@ async def enqueue_admin_notification(
         async with await get_async_session() as session:
             # Usa SQLAlchemy per inserire - PostgreSQL converte automaticamente TEXT a JSONB
             from sqlalchemy import text as sql_text
-            import json
             
             # Escape del JSON per sicurezza (sostituisci singoli apici)
             payload_json_escaped = payload_json.replace("'", "''")
