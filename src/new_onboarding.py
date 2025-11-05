@@ -463,8 +463,11 @@ class NewOnboardingManager:
     async def _process_inventory_immediately(self, update: Update, context: ContextTypes.DEFAULT_TYPE, business_name: str) -> None:
         """Elabora immediatamente il file inventario"""
         from .processor_client import processor_client
+        from .structured_logging import get_request_context
+        import uuid
         
         telegram_id = update.effective_user.id
+        correlation_id = get_request_context().get("correlation_id") or str(uuid.uuid4())
         
         try:
             # Prepara i dati per l'elaborazione
@@ -473,6 +476,7 @@ class NewOnboardingManager:
                 file_type = 'csv' if file_data['file_name'].endswith('.csv') else 'excel'
                 
                 # Scarica il file dal Telegram
+                logger.info(f"[ONBOARDING] Scaricando file: {file_data['file_name']}, telegram_id={telegram_id}")
                 file_obj = await context.bot.get_file(file_data['file_id'])
                 file_content = await file_obj.download_as_bytearray()
                 file_name = file_data['file_name']
@@ -482,16 +486,17 @@ class NewOnboardingManager:
                 file_type = 'photo'
                 
                 # Scarica la foto dal Telegram
+                logger.info(f"[ONBOARDING] Scaricando foto, telegram_id={telegram_id}")
                 file_obj = await context.bot.get_file(photo_data['file_id'])
                 file_content = await file_obj.download_as_bytearray()
                 file_name = 'inventario.jpg'
                 
             else:
-                logger.error("Nessun file inventario trovato per elaborazione immediata")
+                logger.error(f"[ONBOARDING] Nessun file inventario trovato in context.user_data per telegram_id={telegram_id}. Keys: {list(context.user_data.keys())}")
                 return
             
             # Invia al microservizio processor
-            logger.info(f"📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}")
+            logger.info(f"[ONBOARDING] 📤 Invio dati al processor: telegram_id={telegram_id}, business_name={business_name}, file_type={file_type}, file_name={file_name}, file_size={len(file_content)} bytes")
             
             # Invia file e ottieni job_id
             job_response = await processor_client.process_inventory(
@@ -500,8 +505,11 @@ class NewOnboardingManager:
                 file_type=file_type,
                 file_content=file_content,
                 file_name=file_name,
-                file_id=file_data.get('file_id') if 'inventory_file' in context.user_data else photo_data.get('file_id')
+                client_msg_id=f"onboarding:{telegram_id}:{file_name}",
+                correlation_id=correlation_id
             )
+            
+            logger.info(f"[ONBOARDING] Response da processor: {job_response}")
             
             if job_response.get('status') == 'error':
                 # Errore creando job
