@@ -282,28 +282,87 @@ class ProcessorClient:
         max_wait_seconds: int = 3600,
         poll_interval: int = 10
     ) -> Dict[str, Any]:
-        """Attendi completamento job con polling"""
+        """
+        Attendi completamento job con polling intelligente e gestione errori esplicita.
+        
+        Returns:
+            Dict con status: 'completed', 'failed', 'error', 'timeout'
+        """
         start_time = asyncio.get_event_loop().time()
+        consecutive_errors = 0
+        max_consecutive_errors = 5
         
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
+            
+            # Timeout check
             if elapsed > max_wait_seconds:
                 return {
                     "status": "timeout",
                     "error": f"Job {job_id} non completato entro {max_wait_seconds}s"
                 }
             
-            status = await self.get_job_status(job_id)
-            
-            if status.get("status") == "completed":
-                return status
-            elif status.get("status") == "failed":
-                return status
-            elif status.get("status") == "processing" or status.get("status") == "pending":
-                # Attendi prima del prossimo poll
-                await asyncio.sleep(poll_interval)
-            else:
-                # Stato sconosciuto, attendi comunque
+            try:
+                status = await self.get_job_status(job_id)
+                consecutive_errors = 0  # Reset error counter su successo
+                
+                # Gestione esplicita di tutti gli stati
+                job_status = status.get("status")
+                
+                if job_status == "completed":
+                    # Job completato con successo
+                    return status
+                    
+                elif job_status == "failed":
+                    # Job fallito - ritorna immediatamente con errori
+                    return {
+                        "status": "failed",
+                        "error": status.get("error", "Job failed"),
+                        "result": status.get("result", {}),
+                        "job_id": job_id
+                    }
+                    
+                elif job_status == "processing" or job_status == "pending":
+                    # Job ancora in elaborazione
+                    await asyncio.sleep(poll_interval)
+                    
+                elif job_status == "unknown":
+                    # Stato sconosciuto (probabilmente errore get_job_status)
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        return {
+                            "status": "error",
+                            "error": f"Troppi errori consecutivi durante polling: {status.get('error', 'Unknown error')}",
+                            "job_id": job_id
+                        }
+                    await asyncio.sleep(poll_interval)
+                    
+                else:
+                    # Stato non riconosciuto
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        return {
+                            "status": "error",
+                            "error": f"Stato job non riconosciuto: {job_status}",
+                            "job_id": job_id
+                        }
+                    await asyncio.sleep(poll_interval)
+                    
+            except Exception as e:
+                # Errore durante get_job_status
+                consecutive_errors += 1
+                logger.error(
+                    f"[PROCESSOR_CLIENT] Errore durante polling job {job_id}: {e}",
+                    exc_info=True
+                )
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    return {
+                        "status": "error",
+                        "error": f"Errore durante polling: {str(e)}",
+                        "job_id": job_id
+                    }
+                
                 await asyncio.sleep(poll_interval)
     
     async def update_wine_field(

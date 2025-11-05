@@ -4,6 +4,8 @@ NOTA: L'elaborazione dei file è ora gestita dal microservizio processor
 """
 import os
 import logging
+import asyncio
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -107,6 +109,175 @@ class FileUploadManager:
         time_max = max(time_min + 5, time_max)  # Max almeno 5 sec più di min
         
         return time_min, time_max
+    
+    async def _poll_job_and_notify(
+        self,
+        telegram_id: int,
+        job_id: str,
+        chat_id: int,
+        business_name: str,
+        file_name: str,
+        bot
+    ):
+        """
+        Background task per polling job e notifica utente quando completato.
+        Non blocca handler principale.
+        """
+        from .processor_client import processor_client
+        from .database_async import async_db_manager
+        from .bot import _pending_jobs, _pending_jobs_lock
+        
+        try:
+            # Polling job in background
+            result = await processor_client.wait_for_job_completion(
+                job_id=job_id,
+                max_wait_seconds=3600,  # 1 ora massimo
+                poll_interval=10  # Poll ogni 10 secondi
+            )
+            
+            # Rimuovi job da _pending_jobs
+            async with _pending_jobs_lock:
+                if telegram_id in _pending_jobs:
+                    del _pending_jobs[telegram_id]
+            
+            # Estrai dati dal campo 'result' annidato se presente
+            result_status = result.get('status')
+            
+            if result_status == 'completed':
+                # Job completato - estrai dati da result
+                result_data = result.get('result', result)
+                
+                if result_data.get('status') == 'success':
+                    saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
+                    total_wines = result_data.get('total_wines', 0)
+                    warning_count = result_data.get('warning_count', 0)
+                    error_count = result_data.get('error_count', 0)
+                    
+                    # Messaggio base
+                    if error_count > 0:
+                        message = (
+                            f"⚠️ **Elaborazione completata con errori**\n\n"
+                            f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
+                            f"❌ **{error_count} errori critici** durante l'elaborazione\n"
+                        )
+                        if warning_count > 0:
+                            message += f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                        message += (
+                            f"\n📝 Verifica i dettagli nelle note dei vini.\n"
+                            f"💡 Riprova o contatta il supporto se il problema persiste.\n\n"
+                        )
+                    else:
+                        message = (
+                            f"🎉 **Elaborazione completata!**\n\n"
+                            f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
+                        )
+                        if warning_count > 0:
+                            message += (
+                                f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
+                                f"📝 I dettagli sono salvati nelle note di ogni vino\n"
+                                f"💡 Verifica i vini nel tuo inventario per i dettagli\n\n"
+                            )
+                    
+                    message += (
+                        f"🏢 **{business_name}** aggiornato con successo\n\n"
+                        f"🚀 **INVENTARIO OPERATIVO!**\n\n"
+                        f"💬 **Ora puoi:**\n"
+                        f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
+                        f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
+                        f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
+                        f"• Consultare inventario: `/inventario`"
+                    )
+                    
+                    await bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+                    
+                    # Completa onboarding se successo
+                    if error_count == 0 and business_name and business_name != "Upload Manuale":
+                        await async_db_manager.update_user_onboarding(
+                            telegram_id=telegram_id,
+                            onboarding_completed=True
+                        )
+                        logger.info(f"Onboarding completato automaticamente dopo upload inventario per {telegram_id}/{business_name}")
+                else:
+                    # Job completed ma result non è success
+                    error_msg = result_data.get('error', 'Errore sconosciuto')
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"⚠️ **Errore elaborazione inventario**\n\n"
+                            f"Dettagli: {error_msg[:200]}\n\n"
+                            f"📋 **Job ID:** `{job_id}`\n\n"
+                            f"Riprova più tardi o contatta il supporto."
+                        ),
+                        parse_mode='Markdown'
+                    )
+                    
+            elif result_status == 'failed':
+                # Job fallito
+                error_msg = result.get('error', 'Job failed')
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"❌ **Elaborazione fallita**\n\n"
+                        f"Dettagli: {error_msg[:200]}\n\n"
+                        f"📋 **Job ID:** `{job_id}`\n\n"
+                        f"Riprova più tardi o contatta il supporto."
+                    ),
+                    parse_mode='Markdown'
+                )
+                
+            elif result_status in ['error', 'timeout']:
+                # Errore durante polling o timeout
+                error_msg = result.get('error', 'Errore sconosciuto')
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"⚠️ **Errore durante elaborazione**\n\n"
+                        f"Dettagli: {error_msg[:200]}\n\n"
+                        f"💡 **Possibili cause:**\n"
+                        f"• Processor non raggiungibile\n"
+                        f"• Timeout durante l'elaborazione\n"
+                        f"• Problema di connessione\n\n"
+                        f"📋 **Job ID:** `{job_id}`\n\n"
+                        f"Riprova più tardi o contatta il supporto."
+                    ),
+                    parse_mode='Markdown'
+                )
+            else:
+                # Stato sconosciuto
+                logger.error(f"Stato job sconosciuto: {result_status}, result: {result}")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"⚠️ **Errore elaborazione inventario**\n\n"
+                        f"Stato job non riconosciuto: {result_status}\n\n"
+                        f"📋 **Job ID:** `{job_id}`\n\n"
+                        f"Riprova più tardi o contatta il supporto."
+                    ),
+                    parse_mode='Markdown'
+                )
+                
+        except Exception as e:
+            logger.error(f"Errore in _poll_job_and_notify per job {job_id}: {e}", exc_info=True)
+            
+            # Rimuovi job da _pending_jobs anche in caso di errore
+            async with _pending_jobs_lock:
+                if telegram_id in _pending_jobs:
+                    del _pending_jobs[telegram_id]
+            
+            # Notifica errore all'utente
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"❌ **Errore durante elaborazione**\n\n"
+                        f"Si è verificato un errore imprevisto durante l'elaborazione.\n\n"
+                        f"📋 **Job ID:** `{job_id}`\n\n"
+                        f"Riprova più tardi o contatta il supporto."
+                    ),
+                    parse_mode='Markdown'
+                )
+            except Exception as send_error:
+                logger.error(f"Errore invio messaggio errore: {send_error}")
     
     def format_estimated_time(self, time_min: int, time_max: int) -> str:
         """
@@ -250,112 +421,51 @@ class FileUploadManager:
                 )
                 return True
             
+            # ✅ Registra job in _pending_jobs (bot.py)
+            from .bot import _pending_jobs, _pending_jobs_lock
+            chat_id = update.message.chat_id
+            
+            async with _pending_jobs_lock:
+                _pending_jobs[telegram_id] = {
+                    'job_id': job_id,
+                    'status': 'processing',
+                    'file_name': document.file_name,
+                    'started_at': datetime.now(),
+                    'chat_id': chat_id,
+                    'business_name': business_name
+                }
+            
             # Stima tempo elaborazione per messaggio progress
             file_type = 'csv' if file_name.endswith('.csv') else 'excel'
             time_min, time_max = self.estimate_processing_time(file_type, len(file_content), file_content)
             time_estimate = self.format_estimated_time(time_min, time_max)
             
             # Notifica utente che elaborazione è iniziata
-            progress_msg = await update.message.reply_text(
+            await update.message.reply_text(
                 f"✅ **File ricevuto!**\n\n"
                 f"📄 **Nome**: {document.file_name}\n"
                 f"📊 **Dimensione**: {len(file_content):,} bytes\n"
                 f"🔄 **Elaborazione in corso...**\n"
                 f"⏱️ **Tempo stimato**: {time_estimate}\n"
                 f"📋 Job ID: `{job_id}`\n\n"
-                f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
+                f"⏳ Ti manderò un messaggio appena pronto! ✅\n\n"
+                f"💡 Nel frattempo puoi continuare a usare il bot normalmente.",
                 parse_mode='Markdown'
             )
             
-            # Attendi completamento job
-            result = await processor_client.wait_for_job_completion(
-                job_id=job_id,
-                max_wait_seconds=3600,  # 1 ora massimo
-                poll_interval=10  # Poll ogni 10 secondi
+            # ✅ Avvia background task per polling (NON blocca handler)
+            context.application.create_task(
+                self._poll_job_and_notify(
+                    telegram_id=telegram_id,
+                    job_id=job_id,
+                    chat_id=chat_id,
+                    business_name=business_name,
+                    file_name=document.file_name,
+                    bot=context.bot
+                )
             )
             
-            # Elimina messaggio progress
-            try:
-                await progress_msg.delete()
-            except:
-                pass
-            
-            # Estrai dati dal campo 'result' annidato se presente, altrimenti usa result direttamente
-            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
-            result_data = result.get('result', result) if result.get('status') == 'completed' else result
-            
-            if result_data.get('status') == 'success':
-                saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
-                total_wines = result_data.get('total_wines', 0)
-                warning_count = result_data.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result_data.get('error_count', 0)      # Solo errori critici
-                
-                # Messaggio base
-                if error_count > 0:
-                    # Se ci sono errori critici, mostra messaggio di errore
-                    message = (
-                        f"⚠️ **Elaborazione completata con errori**\n\n"
-                        f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
-                        f"❌ **{error_count} errori critici** durante l'elaborazione\n"
-                    )
-                    if warning_count > 0:
-                        message += f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
-                    message += (
-                        f"\n📝 Verifica i dettagli nelle note dei vini.\n"
-                        f"💡 Riprova o contatta il supporto se il problema persiste.\n\n"
-                    )
-                else:
-                    # Successo (con o senza warnings)
-                    message = (
-                        f"🎉 **Elaborazione completata!**\n\n"
-                        f"✅ **{saved_wines} vini** salvati su {total_wines} elaborati\n"
-                    )
-                    
-                    if warning_count > 0:
-                        message += (
-                            f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
-                            f"📝 I dettagli sono salvati nelle note di ogni vino\n"
-                            f"💡 Verifica i vini nel tuo inventario per i dettagli\n\n"
-                        )
-                
-                message += (
-                    f"🏢 **{business_name}** aggiornato con successo\n\n"
-                    f"🚀 **INVENTARIO OPERATIVO!**\n\n"
-                    f"💬 **Ora puoi:**\n"
-                    f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
-                    f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
-                    f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
-                    f"• Consultare inventario: `/inventario`"
-                )
-                
-                await update.message.reply_text(message, parse_mode='Markdown')
-                
-                # Se inventario caricato con successo e business_name valido, completa onboarding - ASYNC
-                if error_count == 0 and business_name and business_name != "Upload Manuale":
-                    await async_db_manager.update_user_onboarding(
-                        telegram_id=telegram_id,
-                        onboarding_completed=True
-                    )
-                    logger.info(f"Onboarding completato automaticamente dopo upload inventario per {telegram_id}/{business_name}")
-            else:
-                # Usa result_data se disponibile, altrimenti result
-                error_source = result_data if 'result_data' in locals() else result
-                error_msg = error_source.get('error', result.get('error', 'Errore sconosciuto'))
-                if not error_msg or error_msg == '...':
-                    error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
-                
-                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
-                await update.message.reply_text(
-                    f"⚠️ **Errore elaborazione inventario**\n\n"
-                    f"Dettagli: {error_msg[:200]}\n\n"
-                    f"💡 **Possibili cause:**\n"
-                    f"• Processor non raggiungibile\n"
-                    f"• Timeout durante l'elaborazione\n"
-                    f"• Problema di connessione\n\n"
-                    f"📋 **Job ID:** `{job_id}`\n\n"
-                    f"Riprova più tardi o contatta il supporto."
-                )
-            
+            # Handler termina immediatamente - bot rimane interattivo
             return True
             
         except Exception as e:
@@ -461,108 +571,48 @@ class FileUploadManager:
                 )
                 return True
             
+            # ✅ Registra job in _pending_jobs (bot.py)
+            from .bot import _pending_jobs, _pending_jobs_lock
+            chat_id = update.message.chat_id
+            
+            async with _pending_jobs_lock:
+                _pending_jobs[telegram_id] = {
+                    'job_id': job_id,
+                    'status': 'processing',
+                    'file_name': 'inventario.jpg',
+                    'started_at': datetime.now(),
+                    'chat_id': chat_id,
+                    'business_name': business_name
+                }
+            
             # Stima tempo elaborazione OCR per messaggio progress
             time_min, time_max = self.estimate_processing_time('photo', len(file_content), file_content)
             time_estimate = self.format_estimated_time(time_min, time_max)
             
             # Notifica utente che elaborazione è iniziata
-            progress_msg = await update.message.reply_text(
+            await update.message.reply_text(
                 f"✅ **Foto ricevuta!**\n\n"
                 f"🔄 **Elaborazione OCR in corso...**\n"
                 f"⏱️ **Tempo stimato**: {time_estimate}\n"
                 f"📋 Job ID: `{job_id}`\n\n"
-                f"⏳ Attendere, l'elaborazione può richiedere alcuni minuti...",
+                f"⏳ Ti manderò un messaggio appena pronto! ✅\n\n"
+                f"💡 Nel frattempo puoi continuare a usare il bot normalmente.",
                 parse_mode='Markdown'
             )
             
-            # Attendi completamento job
-            result = await processor_client.wait_for_job_completion(
-                job_id=job_id,
-                max_wait_seconds=3600,  # 1 ora massimo
-                poll_interval=30  # Poll ogni 30 secondi
+            # ✅ Avvia background task per polling (NON blocca handler)
+            context.application.create_task(
+                self._poll_job_and_notify(
+                    telegram_id=telegram_id,
+                    job_id=job_id,
+                    chat_id=chat_id,
+                    business_name=business_name,
+                    file_name='inventario.jpg',
+                    bot=context.bot
+                )
             )
             
-            # Elimina messaggio progress
-            try:
-                await progress_msg.delete()
-            except:
-                pass
-            
-            # Estrai dati dal campo 'result' annidato se presente, altrimenti usa result direttamente
-            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
-            result_data = result.get('result', result) if result.get('status') == 'completed' else result
-            
-            if result_data.get('status') == 'success':
-                saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
-                total_wines = result_data.get('total_wines', 0)
-                warning_count = result_data.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result_data.get('error_count', 0)      # Solo errori critici
-                
-                # Messaggio base
-                if error_count > 0:
-                    # Se ci sono errori critici, mostra messaggio di errore
-                    message = (
-                        f"⚠️ **Elaborazione OCR completata con errori**\n\n"
-                        f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
-                        f"❌ **{error_count} errori critici** durante l'elaborazione\n"
-                    )
-                    if warning_count > 0:
-                        message += f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
-                    message += (
-                        f"\n📝 Verifica i dettagli nelle note dei vini.\n"
-                        f"💡 Riprova o contatta il supporto se il problema persiste.\n\n"
-                    )
-                else:
-                    # Successo (con o senza warnings)
-                    message = (
-                        f"🎉 **Elaborazione OCR completata!**\n\n"
-                        f"✅ **{saved_wines} vini** estratti e salvati su {total_wines}\n"
-                    )
-                    
-                    if warning_count > 0:
-                        message += (
-                            f"ℹ️ **{warning_count} warnings** (annate mancanti, dati opzionali)\n"
-                            f"📝 I dettagli sono salvati nelle note di ogni vino\n\n"
-                        )
-                
-                message += (
-                    f"🏢 **{business_name}** aggiornato con successo\n\n"
-                    f"🚀 **INVENTARIO OPERATIVO!**\n\n"
-                    f"💬 **Ora puoi:**\n"
-                    f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
-                    f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
-                    f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
-                    f"• Consultare inventario: `/inventario`"
-                )
-                
-                await update.message.reply_text(message, parse_mode='Markdown')
-                
-                # Se inventario caricato con successo e business_name valido, completa onboarding - ASYNC
-                if error_count == 0 and business_name and business_name != "Upload Manuale":
-                    await async_db_manager.update_user_onboarding(
-                        telegram_id=telegram_id,
-                        onboarding_completed=True
-                    )
-                    logger.info(f"Onboarding completato automaticamente dopo upload OCR per {telegram_id}/{business_name}")
-            else:
-                # Usa result_data se disponibile, altrimenti result
-                error_source = result_data if 'result_data' in locals() else result
-                error_msg = error_source.get('error', result.get('error', 'Errore sconosciuto'))
-                if not error_msg or error_msg == '...':
-                    error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
-                
-                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
-                await update.message.reply_text(
-                    f"⚠️ **Errore elaborazione OCR**\n\n"
-                    f"Dettagli: {error_msg[:200]}\n\n"
-                    f"💡 **Possibili cause:**\n"
-                    f"• Processor non raggiungibile\n"
-                    f"• Timeout durante l'elaborazione\n"
-                    f"• Problema di connessione\n\n"
-                    f"📋 **Job ID:** `{job_id}`\n\n"
-                    f"Riprova più tardi o contatta il supporto."
-                )
-            
+            # Handler termina immediatamente - bot rimane interattivo
             return True
             
         except Exception as e:

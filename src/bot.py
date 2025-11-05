@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 _viewer_pending_requests = {}
 _viewer_pending_lock = asyncio.Lock()
 
+# Dict globale per tracciare job in corso per utente
+# Mappa: telegram_id -> {'job_id': str, 'status': str, 'file_name': str, 'started_at': datetime, 'chat_id': int}
+_pending_jobs = {}
+_pending_jobs_lock = asyncio.Lock()
+
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
 
@@ -43,6 +48,20 @@ async def start_cmd(update, context):
     telegram_id = user.id
     
     logger.info(f"Comando /start da: {username} (ID: {telegram_id})")
+    
+    # Verifica se c'è un job in corso per questo utente
+    async with _pending_jobs_lock:
+        if telegram_id in _pending_jobs:
+            job_info = _pending_jobs[telegram_id]
+            await update.message.reply_text(
+                "🔄 **Stiamo lavorando sul tuo inventario!**\n\n"
+                f"📄 **File**: {job_info.get('file_name', 'Sconosciuto')}\n"
+                f"⏱️ **Elaborazione in corso...**\n\n"
+                f"Ti manderò un messaggio appena pronto! ✅\n\n"
+                f"📋 Job ID: `{job_info.get('job_id', 'N/A')}`",
+                parse_mode='Markdown'
+            )
+            return
     
     try:
         # Verifica disponibilità database
@@ -566,6 +585,24 @@ async def help_cmd(update, context):
 
 
 async def chat_handler(update, context):
+    """Gestisce messaggi di chat generici"""
+    telegram_id = update.effective_user.id
+    
+    # Verifica se c'è un job in corso per questo utente
+    async with _pending_jobs_lock:
+        if telegram_id in _pending_jobs:
+            job_info = _pending_jobs[telegram_id]
+            await update.message.reply_text(
+                "🔄 **Stiamo lavorando sul tuo inventario!**\n\n"
+                f"📄 **File**: {job_info.get('file_name', 'Sconosciuto')}\n"
+                f"⏱️ **Elaborazione in corso...**\n\n"
+                f"Ti manderò un messaggio appena pronto! ✅\n\n"
+                f"📋 Job ID: `{job_info.get('job_id', 'N/A')}`\n\n"
+                f"💡 Nel frattempo puoi continuare a usare il bot per altre operazioni.",
+                parse_mode='Markdown'
+            )
+            return
+    
     # Gestione input per aggiornamento campo vino in sospeso
     pending = context.user_data.get('pending_field_update')
     if pending and update.message and update.message.text:
@@ -1582,7 +1619,8 @@ def main():
                 
                 if result.get('ok'):
                     logger.info("✅ Webhook eliminato con successo via API")
-                    time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
+                    # Usa asyncio per sleep anche in contesto sync (durante avvio)
+                    asyncio.run(asyncio.sleep(2))  # Attendi 2 secondi per permettere a Telegram di processare
                 else:
                     description = result.get('description', 'Unknown error')
                     logger.warning(f"⚠️ Risposta API: {description}")
@@ -1617,14 +1655,15 @@ def main():
                             loop = asyncio.get_event_loop()
                             if not loop.is_running():
                                 asyncio.run(_delete_webhook_retry())
-                                time.sleep(3)
+                                # Usa asyncio per sleep anche in contesto sync
+                                asyncio.run(asyncio.sleep(3))
                         except RuntimeError:
                             asyncio.run(_delete_webhook_retry())
-                            time.sleep(3)
+                            asyncio.run(asyncio.sleep(3))
                     except Exception as e2:
                         logger.warning(f"⚠️ Errore eliminazione webhook al retry: {e2}")
                     else:
-                        time.sleep(5)  # Attendi 5 secondi tra i tentativi
+                        asyncio.run(asyncio.sleep(5))  # Attendi 5 secondi tra i tentativi
                 else:
                     logger.info("🔄 Avvio polling...")
                 
