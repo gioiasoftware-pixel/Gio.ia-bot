@@ -550,6 +550,68 @@ async def view_cmd(update, context):
             _viewer_pending_requests.pop(telegram_id, None)
 
 
+def _is_comprehension_error(error_msg: str) -> bool:
+    """
+    Identifica se un errore è un errore di comprensione (AI può risolvere)
+    oppure un errore tecnico (AI non può risolvere).
+    
+    Errori di comprensione (AI può risolvere):
+    - Vino non trovato (parsing sbagliato, nome vino malformato)
+    - Errori che indicano che l'intent classifier ha capito male
+    
+    Errori tecnici (NON passare all'AI):
+    - Business name non trovato
+    - Timeout / HTTP error
+    - Errori di connessione
+    - Errori di validazione input (campi vuoti)
+    """
+    if not error_msg:
+        return False
+    
+    error_lower = error_msg.lower()
+    
+    # Errori di comprensione (AI può risolvere)
+    comprehension_indicators = [
+        "wine not found",
+        "vino non trovato",
+        "non ho trovato",
+        "non trovato",
+        "not found",
+        "nessun vino",
+        "nessun risultato",
+        "no results",
+        "errore sconosciuto",  # Quando il parsing è completamente sbagliato
+    ]
+    
+    # Errori tecnici (NON passare all'AI)
+    technical_indicators = [
+        "business name non trovato",
+        "business name non configurato",
+        "onboarding",
+        "timeout",
+        "http error",
+        "http client error",
+        "connection error",
+        "errore connessione",
+        "nome vino o quantità non validi",  # Validazione input (campi vuoti)
+        "quantità non valida",
+        "telegram_id non trovato",
+    ]
+    
+    # Controlla prima errori tecnici (priorità)
+    for indicator in technical_indicators:
+        if indicator in error_lower:
+            return False  # Errore tecnico, NON passare all'AI
+    
+    # Controlla errori di comprensione
+    for indicator in comprehension_indicators:
+        if indicator in error_lower:
+            return True  # Errore comprensione, passa all'AI
+    
+    # Default: se non riconosciuto, assume errore tecnico (non passare all'AI)
+    return False
+
+
 async def help_cmd(update, context):
     help_text = (
         "🤖 **Gio.ia-bot - Comandi disponibili:**\n\n"
@@ -739,11 +801,22 @@ async def chat_handler(update, context):
                         result.get("formatted_message", "✅ Operazione completata"),
                         parse_mode='Markdown'
                     )
+                    return  # ✅ Successo, termina qui
                 else:
+                    # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
                     error_msg = result.get("error", "Errore sconosciuto")
-                    await update.message.reply_text(f"❌ {error_msg}")
-                
-                return  # END - NO AI chiamata, NO process_movement_message ✅
+                    
+                    # Controlla se è un errore di comprensione (AI può risolvere)
+                    if _is_comprehension_error(error_msg):
+                        logger.info(
+                            f"[BOT] Esecuzione movimento fallita con errore comprensione: '{error_msg}' - "
+                            f"Passando all'AI come fallback"
+                        )
+                        # NON fare return, continua al fallback AI sotto
+                    else:
+                        # Errore tecnico, mostra e termina
+                        await update.message.reply_text(f"❌ {error_msg}")
+                        return
             
             # Se è un altro intent (ricerca, lista, etc.), gestiscilo normalmente
             logger.info(
@@ -759,11 +832,22 @@ async def chat_handler(update, context):
                     result.get("formatted_message", "✅ Operazione completata"),
                     parse_mode='Markdown'
                 )
+                return  # ✅ Successo, termina qui
             else:
+                # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
                 error_msg = result.get("error", "Errore sconosciuto")
-                await update.message.reply_text(f"❌ {error_msg}")
-            
-            return  # END - NO AI chiamata ✅
+                
+                # Controlla se è un errore di comprensione (AI può risolvere)
+                if _is_comprehension_error(error_msg):
+                    logger.info(
+                        f"[BOT] Esecuzione intent fallita con errore comprensione: '{error_msg}' - "
+                        f"Passando all'AI come fallback"
+                    )
+                    # NON fare return, continua al fallback AI sotto
+                else:
+                    # Errore tecnico, mostra e termina
+                    await update.message.reply_text(f"❌ {error_msg}")
+                    return
         
         # ✅ FALLBACK: Se Intent Classifier non ha riconosciuto, prova process_movement_message (per compatibilità)
         logger.info(f"[BOT] Intent unknown, provando process_movement_message come fallback...")
@@ -772,8 +856,8 @@ async def chat_handler(update, context):
             logger.info(f"[BOT] Movement message handled da process_movement_message")
             return
         
-        # Se intent unknown dopo 5 retry, usa AI (FALLBACK)
-        logger.info(f"[BOT] Intent unknown dopo 5 retry, usando AI (fallback)")
+        # ✅ FALLBACK AI: Se intent unknown O se esecuzione intent fallita con errore comprensione
+        logger.info(f"[BOT] Passando all'AI come fallback (intent unknown o errore comprensione)")
         
         await update.message.reply_text("💭 Sto pensando...")
         
