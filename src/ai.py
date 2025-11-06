@@ -141,7 +141,7 @@ def _parse_filters(prompt: str) -> dict:
         filters['country'] = 'Spagna'
     if re.search(r'\b(tedes[ch]?[hi]?|germany)\b', p):
         filters['country'] = 'Germania'
-    if re.search(r'\b(stati\s+uniti|stati\s+uniti\s+d[\'']?america|america|united\s+states|us\b)\b', p):
+    if re.search(r'\b(stati\s+uniti|stati\s+uniti\s+d[\'"]?america|america|united\s+states|us)\b', p):
         filters['country'] = 'USA'
     if re.search(r'\b(portoghes[ei]?|portugal)\b', p):
         filters['country'] = 'Portogallo'
