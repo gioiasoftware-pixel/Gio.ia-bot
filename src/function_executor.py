@@ -57,39 +57,64 @@ class FunctionExecutor:
     async def _execute_search_wines(self, params: Dict) -> Dict:
         """Cerca vini - USA TEMPLATE"""
         from .database_async import async_db_manager
-        from .response_templates import format_inventory_list, format_wine_not_found
+        from .response_templates import format_inventory_list, format_wine_not_found, format_search_no_results
         
         search_term = params.get("search_term", "").strip()
+        filters = params.get("filters", {})
         limit = params.get("limit", 10)
         
-        if not search_term:
-            # Se search_term vuoto, ritorna lista completa
-            wines = await async_db_manager.get_user_wines(self.telegram_id)
-        else:
-            wines = await async_db_manager.search_wines(self.telegram_id, search_term, limit=limit)
+        # ✅ Se ci sono filtri, usa search_wines_filtered
+        if filters:
+            logger.info(f"[FUNCTION_EXECUTOR] Cercando vini con filtri: {filters}")
+            wines = await async_db_manager.search_wines_filtered(self.telegram_id, filters, limit=limit)
+            
+            if not wines:
+                return {
+                    "success": True,
+                    "formatted_message": format_search_no_results(filters),
+                    "use_template": True
+                }
+            else:
+                return {
+                    "success": True,
+                    "formatted_message": format_inventory_list(wines, limit=limit),
+                    "use_template": True
+                }
         
-        if not wines:
-            return {
-                "success": True,
-                "formatted_message": format_wine_not_found(search_term if search_term else "nessun termine"),
-                "use_template": True
-            }
-        elif len(wines) == 1:
-            # Un solo vino - ritorna dati grezzi per AI o template dettagliato
-            from .response_templates import format_wine_info
-            return {
-                "success": True,
-                "formatted_message": format_wine_info(wines[0]),
-                "use_template": True,
-                "count": 1,
-                "wines": [{"id": w.id, "name": w.name, "producer": w.producer, "quantity": w.quantity} for w in wines]
-            }
-        else:
-            return {
-                "success": True,
-                "formatted_message": format_inventory_list(wines, limit=limit),
-                "use_template": True
-            }
+        # ✅ Se no filtri ma c'è search_term, usa search_wines normale
+        if search_term:
+            wines = await async_db_manager.search_wines(self.telegram_id, search_term, limit=limit)
+            
+            if not wines:
+                return {
+                    "success": True,
+                    "formatted_message": format_wine_not_found(search_term),
+                    "use_template": True
+                }
+            elif len(wines) == 1:
+                # Un solo vino - ritorna template dettagliato
+                from .response_templates import format_wine_info
+                return {
+                    "success": True,
+                    "formatted_message": format_wine_info(wines[0]),
+                    "use_template": True,
+                    "count": 1,
+                    "wines": [{"id": w.id, "name": w.name, "producer": w.producer, "quantity": w.quantity} for w in wines]
+                }
+            else:
+                return {
+                    "success": True,
+                    "formatted_message": format_inventory_list(wines, limit=limit),
+                    "use_template": True
+                }
+        
+        # ✅ Se né filtri né search_term, ritorna lista completa
+        wines = await async_db_manager.get_user_wines(self.telegram_id)
+        return {
+            "success": True,
+            "formatted_message": format_inventory_list(wines, limit=limit),
+            "use_template": True
+        }
     
     async def _execute_register_consumption(self, params: Dict) -> Dict:
         """Registra consumo - USA TEMPLATE"""
