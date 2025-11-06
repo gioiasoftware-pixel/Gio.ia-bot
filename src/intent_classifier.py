@@ -131,27 +131,119 @@ class IntentClassifier:
             'dolce': 'dolce', 'dolci': 'dolce',
         }
         
+        # Paesi e sinonimi (per riconoscere filtri geografici)
+        country_synonyms = {
+            'italia': 'Italia', 'italiano': 'Italia', 'italiani': 'Italia', 'italiane': 'Italia',
+            'italy': 'Italia',
+            'francia': 'Francia', 'francese': 'Francia', 'francesi': 'Francia',
+            'france': 'Francia',
+            'spagna': 'Spagna', 'spagnolo': 'Spagna', 'spagnoli': 'Spagna',
+            'spain': 'Spagna',
+            'usa': 'USA', 'stati uniti': 'USA', 'stati uniti d\'america': 'USA', 'america': 'USA',
+            'united states': 'USA', 'us': 'USA',
+            'germania': 'Germania', 'tedesco': 'Germania', 'tedeschi': 'Germania',
+            'germany': 'Germania',
+            'portogallo': 'Portogallo', 'portoghese': 'Portogallo', 'portoghesi': 'Portogallo',
+            'portugal': 'Portogallo',
+            'australia': 'Australia', 'australiano': 'Australia', 'australiani': 'Australia',
+            'cile': 'Cile', 'cileno': 'Cile', 'cileni': 'Cile',
+            'chile': 'Cile',
+            'argentina': 'Argentina', 'argentino': 'Argentina', 'argentini': 'Argentina',
+        }
+        
+        # Regioni italiane comuni
+        italian_regions = {
+            'toscana': 'Toscana', 'toscano': 'Toscana', 'toscani': 'Toscana',
+            'piemonte': 'Piemonte', 'piemontese': 'Piemonte', 'piemontesi': 'Piemonte',
+            'veneto': 'Veneto', 'veneto': 'Veneto', 'veneti': 'Veneto',
+            'lombardia': 'Lombardia', 'lombardo': 'Lombardia', 'lombardi': 'Lombardia',
+            'emilia': 'Emilia-Romagna', 'emilia romagna': 'Emilia-Romagna', 'emiliano': 'Emilia-Romagna',
+            'umbria': 'Umbria', 'umbro': 'Umbria', 'umbri': 'Umbria',
+            'marche': 'Marche', 'marchigiano': 'Marche', 'marchigiani': 'Marche',
+            'abruzzo': 'Abruzzo', 'abruzzese': 'Abruzzo', 'abruzzesi': 'Abruzzo',
+            'campania': 'Campania', 'campano': 'Campania', 'campani': 'Campania',
+            'puglia': 'Puglia', 'pugliese': 'Puglia', 'pugliesi': 'Puglia',
+            'sicilia': 'Sicilia', 'siciliano': 'Sicilia', 'siciliani': 'Sicilia',
+            'sardegna': 'Sardegna', 'sardo': 'Sardegna', 'sardi': 'Sardegna',
+        }
+        
         # Ricerca vini con pattern "quanti X ho?"
         quantity_pattern = r'\b(quanti|quante)\s+(.+?)\s+(?:ho|hai|ci sono|in cantina|in magazzino)'
         match = re.search(quantity_pattern, message, re.IGNORECASE)
         if match:
             search_term = match.group(2).strip().lower()
+            filters = {}
+            
             # Controlla se è un tipo di vino comune
             if search_term in wine_types:
-                wine_type = wine_types[search_term]
+                filters["wine_type"] = wine_types[search_term]
                 return Intent(
                     type="search_wines",
                     confidence=0.9,
-                    parameters={"filters": {"wine_type": wine_type}, "limit": 50},
+                    parameters={"filters": filters, "limit": 50},
                     handler="search_wines"
                 )
-            # Altrimenti usa search_term normale
+            
+            # Controlla se contiene un paese
+            for synonym, country in country_synonyms.items():
+                if synonym in search_term:
+                    filters["country"] = country
+                    break
+            
+            # Controlla se contiene una regione italiana
+            for synonym, region in italian_regions.items():
+                if synonym in search_term:
+                    filters["region"] = region
+                    break
+            
+            # Se ha filtri, usali
+            if filters:
+                return Intent(
+                    type="search_wines",
+                    confidence=0.9,
+                    parameters={"filters": filters, "limit": 50},
+                    handler="search_wines"
+                )
+            
+            # Altrimenti usa search_term normale (l'AI interpreterà meglio)
             return Intent(
-                type="search_wines",
-                confidence=0.8,
-                parameters={"search_term": search_term, "limit": 10},
-                handler="search_wines"
+                type="unknown",  # ✅ Passa all'AI per interpretazione migliore
+                confidence=0.0,
+                parameters={}
             )
+        
+        # Pattern "vini X" o "X vini" (es. "vini italiani", "vini della toscana")
+        wine_pattern = r'\b(vini|vino)\s+(.+?)(?:\s|$)'
+        match = re.search(wine_pattern, message, re.IGNORECASE)
+        if match:
+            descriptor = match.group(2).strip().lower()
+            filters = {}
+            
+            # Controlla tipo di vino
+            if descriptor in wine_types:
+                filters["wine_type"] = wine_types[descriptor]
+            
+            # Controlla paese
+            for synonym, country in country_synonyms.items():
+                if synonym in descriptor:
+                    filters["country"] = country
+                    break
+            
+            # Controlla regione
+            for synonym, region in italian_regions.items():
+                if synonym in descriptor:
+                    filters["region"] = region
+                    break
+            
+            if filters:
+                return Intent(
+                    type="search_wines",
+                    confidence=0.9,
+                    parameters={"filters": filters, "limit": 50},
+                    handler="search_wines"
+                )
+            # Se non riconosce, passa all'AI
+            return Intent(type="unknown", confidence=0.0, parameters={})
         
         # Altri pattern di ricerca
         search_patterns = [
@@ -163,22 +255,35 @@ class IntentClassifier:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
                 search_term = match.group(2).strip() if len(match.groups()) >= 2 else ""
-                # Controlla se è un tipo di vino comune
                 search_term_lower = search_term.lower()
+                filters = {}
+                
+                # Controlla tipo di vino
                 if search_term_lower in wine_types:
-                    wine_type = wine_types[search_term_lower]
+                    filters["wine_type"] = wine_types[search_term_lower]
+                
+                # Controlla paese
+                for synonym, country in country_synonyms.items():
+                    if synonym in search_term_lower:
+                        filters["country"] = country
+                        break
+                
+                # Controlla regione
+                for synonym, region in italian_regions.items():
+                    if synonym in search_term_lower:
+                        filters["region"] = region
+                        break
+                
+                if filters:
                     return Intent(
                         type="search_wines",
                         confidence=0.9,
-                        parameters={"filters": {"wine_type": wine_type}, "limit": 50},
+                        parameters={"filters": filters, "limit": 50},
                         handler="search_wines"
                     )
-                return Intent(
-                    type="search_wines",
-                    confidence=0.8,
-                    parameters={"search_term": search_term, "limit": 10},
-                    handler="search_wines"
-                )
+                
+                # Se non riconosce, passa all'AI per interpretazione migliore
+                return Intent(type="unknown", confidence=0.0, parameters={})
         
         # Lista inventario
         if re.search(r'\b(lista|elenco|mostra|mostrami|vedi)\s+inventario', message, re.IGNORECASE):

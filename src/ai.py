@@ -660,6 +660,27 @@ INVENTARIO ATTUALE:
         # Sistema prompt con contesto
         system_prompt = f"""Sei Gio.ia-bot, un assistente AI specializzato nella gestione inventario vini. Sei gentile, professionale e parli in italiano.
 
+IMPORTANTE - INTERPRETAZIONE SINONIMI GEOGRAFICI:
+Quando l'utente menziona paesi o regioni, interpreta correttamente i sinonimi:
+- "stati uniti", "stati uniti d'america", "america", "united states", "us" → country: "USA"
+- "italia", "italiano", "italiani", "italiane", "italy" → country: "Italia"
+- "francia", "francese", "francesi", "france" → country: "Francia"
+- "spagna", "spagnolo", "spagnoli", "spain" → country: "Spagna"
+- "germania", "tedesco", "tedeschi", "germany" → country: "Germania"
+- "portogallo", "portoghese", "portoghesi", "portugal" → country: "Portogallo"
+- "australia", "australiano", "australiani" → country: "Australia"
+- "cile", "cileno", "cileni", "chile" → country: "Cile"
+- "argentina", "argentino", "argentini" → country: "Argentina"
+
+Per regioni italiane:
+- "toscana", "toscano", "toscani" → region: "Toscana"
+- "piemonte", "piemontese", "piemontesi" → region: "Piemonte"
+- "veneto", "veneti" → region: "Veneto"
+- "lombardia", "lombardo", "lombardi" → region: "Lombardia"
+- E così via per altre regioni italiane
+
+Quando l'utente chiede "vini italiani" o "vini degli stati uniti", usa sempre la funzione search_wines con filtri corretti (country/region), NON cercare come nome vino.
+
 {user_context}{specific_wine_info}
 
 CAPACITÀ:
