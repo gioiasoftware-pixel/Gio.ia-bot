@@ -63,9 +63,11 @@ class FunctionExecutor:
         filters = params.get("filters", {})
         limit = params.get("limit", 10)
         
-        # ✅ Se ci sono filtri, usa search_wines_filtered
+        # ✅ Se ci sono filtri, normalizza valori e usa search_wines_filtered
         if filters:
-            logger.info(f"[FUNCTION_EXECUTOR] Cercando vini con filtri: {filters}")
+            # ✅ NORMALIZZAZIONE FILTRI: Corregge typo e sinonimi
+            filters = self._normalize_filters(filters)
+            logger.info(f"[FUNCTION_EXECUTOR] Cercando vini con filtri (normalizzati): {filters}")
             wines = await async_db_manager.search_wines_filtered(self.telegram_id, filters, limit=limit)
             
             if not wines:
@@ -319,10 +321,127 @@ class FunctionExecutor:
         """Aggiorna campo vino - MESSAGGIO SEMPLICE"""
         # TODO: Implementare quando processor supporta update_wine_field
         # Per ora ritorna errore
-        return {
-            "success": False,
-            "error": "Funzione update_wine_field non ancora implementata nel processor"
+            return {
+                "success": False,
+                "error": "Funzione update_wine_field non ancora implementata nel processor"
+            }
+    
+    def _normalize_filters(self, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalizza valori dei filtri per correggere typo e sinonimi.
+        Usa rapidfuzz per fuzzy matching su valori country, region, wine_type.
+        """
+        normalized = filters.copy()
+        
+        # Mappa sinonimi comuni per country
+        country_synonyms = {
+            'stati uniti': 'USA', 'stati uniti d\'america': 'USA', 'america': 'USA', 'united states': 'USA', 'us': 'USA',
+            'italia': 'Italia', 'italiano': 'Italia', 'italiani': 'Italia', 'italiane': 'Italia', 'italy': 'Italia',
+            'francia': 'Francia', 'francese': 'Francia', 'francesi': 'Francia', 'france': 'Francia',
+            'spagna': 'Spagna', 'spagnolo': 'Spagna', 'spagnoli': 'Spagna', 'spain': 'Spagna',
+            'germania': 'Germania', 'tedesco': 'Germania', 'tedeschi': 'Germania', 'germany': 'Germania',
+            'portogallo': 'Portogallo', 'portoghese': 'Portogallo', 'portoghesi': 'Portogallo', 'portugal': 'Portogallo',
+            'australia': 'Australia', 'australiano': 'Australia', 'australiani': 'Australia',
+            'cile': 'Cile', 'cileno': 'Cile', 'cileni': 'Cile', 'chile': 'Cile',
+            'argentina': 'Argentina', 'argentino': 'Argentina', 'argentini': 'Argentina',
         }
+        
+        # Mappa sinonimi comuni per wine_type
+        wine_type_synonyms = {
+            'rosso': 'rosso', 'rossi': 'rosso', 'red': 'rosso',
+            'bianco': 'bianco', 'bianchi': 'bianco', 'bianche': 'bianco', 'white': 'bianco',
+            'spumante': 'spumante', 'spumanti': 'spumante', 'sparkling': 'spumante', 'champagne': 'spumante',
+            'rosato': 'rosato', 'rosati': 'rosato', 'rosé': 'rosato', 'rose': 'rosato',
+        }
+        
+        # Normalizza country
+        if 'country' in normalized and normalized['country']:
+            country_lower = str(normalized['country']).lower().strip()
+            if country_lower in country_synonyms:
+                normalized['country'] = country_synonyms[country_lower]
+                logger.info(f"[FUNCTION_EXECUTOR] Normalizzato country: '{country_lower}' → '{normalized['country']}'")
+            else:
+                # Prova fuzzy matching con rapidfuzz
+                try:
+                    from rapidfuzz import fuzz, process
+                    valid_countries = ['USA', 'Italia', 'Francia', 'Spagna', 'Germania', 'Portogallo', 'Australia', 'Cile', 'Argentina']
+                    best_match = process.extractOne(
+                        country_lower,
+                        valid_countries,
+                        scorer=fuzz.WRatio,
+                        score_cutoff=70
+                    )
+                    if best_match:
+                        matched_country, score, _ = best_match
+                        logger.info(
+                            f"[FUNCTION_EXECUTOR] Fuzzy matching country: '{country_lower}' → '{matched_country}' "
+                            f"(similarità: {score:.1f}%)"
+                        )
+                        normalized['country'] = matched_country
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.error(f"[FUNCTION_EXECUTOR] Errore fuzzy matching country: {e}")
+        
+        # Normalizza wine_type
+        if 'wine_type' in normalized and normalized['wine_type']:
+            wine_type_lower = str(normalized['wine_type']).lower().strip()
+            if wine_type_lower in wine_type_synonyms:
+                normalized['wine_type'] = wine_type_synonyms[wine_type_lower]
+                logger.info(f"[FUNCTION_EXECUTOR] Normalizzato wine_type: '{wine_type_lower}' → '{normalized['wine_type']}'")
+            else:
+                # Prova fuzzy matching con rapidfuzz
+                try:
+                    from rapidfuzz import fuzz, process
+                    valid_types = ['rosso', 'bianco', 'spumante', 'rosato']
+                    best_match = process.extractOne(
+                        wine_type_lower,
+                        valid_types,
+                        scorer=fuzz.WRatio,
+                        score_cutoff=70
+                    )
+                    if best_match:
+                        matched_type, score, _ = best_match
+                        logger.info(
+                            f"[FUNCTION_EXECUTOR] Fuzzy matching wine_type: '{wine_type_lower}' → '{matched_type}' "
+                            f"(similarità: {score:.1f}%)"
+                        )
+                        normalized['wine_type'] = matched_type
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.error(f"[FUNCTION_EXECUTOR] Errore fuzzy matching wine_type: {e}")
+        
+        # Normalizza region (usa rapidfuzz per typo)
+        if 'region' in normalized and normalized['region']:
+            region_value = str(normalized['region']).strip()
+            # Prova fuzzy matching con rapidfuzz su regioni comuni
+            try:
+                from rapidfuzz import fuzz, process
+                common_regions = [
+                    'Toscana', 'Piemonte', 'Veneto', 'Sicilia', 'Sardegna', 'Lombardia', 'Marche', 'Umbria', 'Lazio',
+                    'Puglia', 'Abruzzo', 'Friuli', 'Trentino', 'Alto Adige', 'Campania', 'Liguria', 'Emilia', 'Romagna'
+                ]
+                best_match = process.extractOne(
+                    region_value,
+                    common_regions,
+                    scorer=fuzz.WRatio,
+                    score_cutoff=70
+                )
+                if best_match:
+                    matched_region, score, _ = best_match
+                    if score >= 70:
+                        logger.info(
+                            f"[FUNCTION_EXECUTOR] Fuzzy matching region: '{region_value}' → '{matched_region}' "
+                            f"(similarità: {score:.1f}%)"
+                        )
+                        normalized['region'] = matched_region
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.error(f"[FUNCTION_EXECUTOR] Errore fuzzy matching region: {e}")
+        
+        return normalized
     
     async def _execute_get_wine_details(self, params: Dict) -> Dict:
         """Dettagli vino - USA TEMPLATE"""
@@ -346,7 +465,7 @@ class FunctionExecutor:
         }
     
     async def _execute_get_wine_info(self, params: Dict) -> Dict:
-        """Info vino per query - USA TEMPLATE"""
+        """Info vino per query - USA TEMPLATE con fuzzy matching per typo"""
         from .database_async import async_db_manager
         from .response_templates import format_wine_info, format_wine_not_found
         
@@ -354,7 +473,43 @@ class FunctionExecutor:
         if not wine_query:
             return {"success": False, "error": "wine_query non fornito"}
         
-        wines = await async_db_manager.search_wines(self.telegram_id, wine_query, limit=1)
+        # ✅ FUZZY MATCHING: Cerca vini simili per correggere typo
+        wines = await async_db_manager.search_wines(self.telegram_id, wine_query, limit=10)
+        
+        if not wines:
+            # Se non trova match, prova ricerca più permissiva (primi caratteri)
+            if len(wine_query) >= 4:
+                short_search = wine_query[:4].lower()
+                wines = await async_db_manager.search_wines(self.telegram_id, short_search, limit=10)
+        
+        # Se ancora non trova, usa rapidfuzz per fuzzy matching su tutti i vini
+        if not wines:
+            try:
+                from rapidfuzz import fuzz, process
+                all_wines = await async_db_manager.get_user_wines(self.telegram_id)
+                
+                if all_wines:
+                    # Cerca il vino più simile usando rapidfuzz
+                    wine_names = [w.name for w in all_wines]
+                    best_match = process.extractOne(
+                        wine_query,
+                        wine_names,
+                        scorer=fuzz.WRatio,  # Weighted Ratio (migliore per typo)
+                        score_cutoff=70  # Minimo 70% di similarità
+                    )
+                    
+                    if best_match:
+                        matched_name, score, _ = best_match
+                        logger.info(
+                            f"[FUNCTION_EXECUTOR] Fuzzy matching rapidfuzz per info vino: '{wine_query}' → '{matched_name}' "
+                            f"(similarità: {score:.1f}%)"
+                        )
+                        # Trova il vino corrispondente
+                        wines = [w for w in all_wines if w.name == matched_name]
+            except ImportError:
+                logger.warning("[FUNCTION_EXECUTOR] rapidfuzz non disponibile, salto fuzzy matching avanzato")
+            except Exception as e:
+                logger.error(f"[FUNCTION_EXECUTOR] Errore fuzzy matching rapidfuzz: {e}")
         
         if not wines:
             return {
@@ -363,9 +518,16 @@ class FunctionExecutor:
                 "use_template": True
             }
         
+        # Se trova più vini, usa il primo (più probabile)
+        selected_wine = wines[0]
+        if len(wines) > 1:
+            logger.info(
+                f"[FUNCTION_EXECUTOR] Trovati {len(wines)} vini per '{wine_query}', uso il primo: '{selected_wine.name}'"
+            )
+        
         return {
             "success": True,
-            "formatted_message": format_wine_info(wines[0]),
+            "formatted_message": format_wine_info(selected_wine),
             "use_template": True
         }
     
