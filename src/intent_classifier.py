@@ -121,10 +121,41 @@ class IntentClassifier:
     async def _classify_by_keywords(self, message: str) -> Intent:
         """Classifica usando keyword matching"""
         
-        # Ricerca vini
+        # Tipi di vino comuni (per riconoscere quando usare filtri)
+        wine_types = {
+            'spumante': 'spumante', 'spumanti': 'spumante',
+            'rosso': 'rosso', 'rossi': 'rosso',
+            'bianco': 'bianco', 'bianchi': 'bianco',
+            'rosato': 'rosato', 'rosati': 'rosato',
+            'passito': 'passito', 'passiti': 'passito',
+            'dolce': 'dolce', 'dolci': 'dolce',
+        }
+        
+        # Ricerca vini con pattern "quanti X ho?"
+        quantity_pattern = r'\b(quanti|quante)\s+(.+?)\s+(?:ho|hai|ci sono|in cantina|in magazzino)'
+        match = re.search(quantity_pattern, message, re.IGNORECASE)
+        if match:
+            search_term = match.group(2).strip().lower()
+            # Controlla se è un tipo di vino comune
+            if search_term in wine_types:
+                wine_type = wine_types[search_term]
+                return Intent(
+                    type="search_wines",
+                    confidence=0.9,
+                    parameters={"filters": {"wine_type": wine_type}, "limit": 50},
+                    handler="search_wines"
+                )
+            # Altrimenti usa search_term normale
+            return Intent(
+                type="search_wines",
+                confidence=0.8,
+                parameters={"search_term": search_term, "limit": 10},
+                handler="search_wines"
+            )
+        
+        # Altri pattern di ricerca
         search_patterns = [
-            r'\b(mostra|mostrami|dimmi|dammi|cerco|trova|quanti|quante)\s+(.*vino|.*vini)',
-            r'\b(quanti|quante)\s+(.+?)\s+(?:ho|hai|ci sono|in cantina|in magazzino)',
+            r'\b(mostra|mostrami|dimmi|dammi|cerco|trova)\s+(.*vino|.*vini)',
             r'\b(quanto|quanto costa|prezzo)\s+(.+?)\s+(?:vendo|vendi|costano)',
         ]
         
@@ -132,6 +163,16 @@ class IntentClassifier:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
                 search_term = match.group(2).strip() if len(match.groups()) >= 2 else ""
+                # Controlla se è un tipo di vino comune
+                search_term_lower = search_term.lower()
+                if search_term_lower in wine_types:
+                    wine_type = wine_types[search_term_lower]
+                    return Intent(
+                        type="search_wines",
+                        confidence=0.9,
+                        parameters={"filters": {"wine_type": wine_type}, "limit": 50},
+                        handler="search_wines"
+                    )
                 return Intent(
                     type="search_wines",
                     confidence=0.8,
