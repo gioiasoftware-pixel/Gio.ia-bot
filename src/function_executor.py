@@ -321,10 +321,10 @@ class FunctionExecutor:
         """Aggiorna campo vino - MESSAGGIO SEMPLICE"""
         # TODO: Implementare quando processor supporta update_wine_field
         # Per ora ritorna errore
-            return {
-                "success": False,
-                "error": "Funzione update_wine_field non ancora implementata nel processor"
-            }
+        return {
+            "success": False,
+            "error": "Funzione update_wine_field non ancora implementata nel processor"
+        }
     
     def _normalize_filters(self, filters: Dict[str, Any]) -> Dict[str, Any]:
         """
