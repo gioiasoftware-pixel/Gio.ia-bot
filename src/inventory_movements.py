@@ -175,31 +175,9 @@ class InventoryMovementManager:
                 f"full_result_keys={list(result.keys())}"
             )
             
-            # Se il job è in processing, avvia polling in background
-            if result.get('status') == 'processing' and result.get('job_id'):
-                job_id = result.get('job_id')
-                
-                # Messaggio iniziale
-                await update.message.reply_text(
-                    f"⏳ **Elaborazione in corso...**\n\n"
-                    f"🍷 Registrando consumo di {quantity} bottiglie di {exact_wine_name}...\n\n"
-                    f"Ti invierò un messaggio quando sarà completato."
-                )
-                
-                # Avvia polling in background
-                context.application.create_task(
-                    self._poll_movement_job_and_notify(
-                        telegram_id=telegram_id,
-                        job_id=job_id,
-                        chat_id=update.effective_chat.id,
-                        wine_name=exact_wine_name,
-                        quantity=quantity,
-                        movement_type='consumo',
-                        bot=context.bot
-                    )
-                )
-            elif result.get('status') == 'success' or result.get('status') == 'completed':
-                # Job completato immediatamente (non dovrebbe succedere, ma gestiamo)
+            # Processor ora ritorna risultato immediatamente (sincrono)
+            if result.get('status') == 'success':
+                # Job completato immediatamente (elaborazione sincrona)
                 success_message = (
                     f"✅ **Consumo registrato**\n\n"
                     f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
@@ -294,31 +272,9 @@ class InventoryMovementManager:
                 f"status={result.get('status')}, job_id={result.get('job_id')}"
             )
             
-            # Se il job è in processing, avvia polling in background
-            if result.get('status') == 'processing' and result.get('job_id'):
-                job_id = result.get('job_id')
-                
-                # Messaggio iniziale
-                await update.message.reply_text(
-                    f"⏳ **Elaborazione in corso...**\n\n"
-                    f"🍷 Registrando rifornimento di {quantity} bottiglie di {exact_wine_name}...\n\n"
-                    f"Ti invierò un messaggio quando sarà completato."
-                )
-                
-                # Avvia polling in background
-                context.application.create_task(
-                    self._poll_movement_job_and_notify(
-                        telegram_id=telegram_id,
-                        job_id=job_id,
-                        chat_id=update.effective_chat.id,
-                        wine_name=exact_wine_name,
-                        quantity=quantity,
-                        movement_type='rifornimento',
-                        bot=context.bot
-                    )
-                )
-            elif result.get('status') == 'success' or result.get('status') == 'completed':
-                # Job completato immediatamente
+            # Processor ora ritorna risultato immediatamente (sincrono)
+            if result.get('status') == 'success':
+                # Job completato immediatamente (elaborazione sincrona)
                 success_message = (
                     f"✅ **Rifornimento registrato**\n\n"
                     f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
@@ -356,11 +312,21 @@ class InventoryMovementManager:
         from .processor_client import processor_client
         
         try:
+            logger.info(
+                f"[MOVEMENT] Inizio polling job {job_id} | "
+                f"telegram_id={telegram_id}, wine_name='{wine_name}', movement_type={movement_type}"
+            )
+            
             # Polling job in background
             result = await processor_client.wait_for_job_completion(
                 job_id=job_id,
                 max_wait_seconds=300,  # 5 minuti massimo per un movimento
                 poll_interval=2  # Poll ogni 2 secondi (movimenti sono veloci)
+            )
+            
+            logger.info(
+                f"[MOVEMENT] Polling completato per job {job_id} | "
+                f"result_status={result.get('status')}, result_keys={list(result.keys())}"
             )
             
             # Estrai dati dal campo 'result' annidato se presente
@@ -370,15 +336,28 @@ class InventoryMovementManager:
                 # Job completato - estrai dati da result
                 result_data = result.get('result', {})
                 
+                logger.info(
+                    f"[MOVEMENT] Job {job_id} completed | "
+                    f"result_data_type={type(result_data)}, result_data_keys={list(result_data.keys()) if isinstance(result_data, dict) else 'N/A'}"
+                )
+                
                 # Se result è una stringa JSON, parsala
                 if isinstance(result_data, str):
                     import json
                     try:
                         result_data = json.loads(result_data)
-                    except:
+                        logger.info(f"[MOVEMENT] Parsed JSON result_data per job {job_id}")
+                    except Exception as json_err:
+                        logger.error(f"[MOVEMENT] Errore parsing JSON result_data per job {job_id}: {json_err}")
                         result_data = {}
                 
                 if result_data.get('status') == 'success':
+                    logger.info(
+                        f"[MOVEMENT] Job {job_id} success | "
+                        f"wine_name={result_data.get('wine_name')}, "
+                        f"quantity_before={result_data.get('quantity_before')}, "
+                        f"quantity_after={result_data.get('quantity_after')}"
+                    )
                     wine_name_result = result_data.get('wine_name', wine_name)
                     quantity_before = result_data.get('quantity_before', 0)
                     quantity_after = result_data.get('quantity_after', 0)
