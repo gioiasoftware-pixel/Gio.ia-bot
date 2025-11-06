@@ -785,6 +785,8 @@ async def chat_handler(update, context):
         intent = await intent_classifier.classify_with_retry(user_text, telegram_id)
         
         # Se intent trovato (inclusi movimenti multipli), esegui direttamente (NO AI, NO process_movement_message)
+        intent_found_but_failed = False  # Flag per tracciare se intent trovato ma esecuzione fallita con errore comprensione
+        
         if intent.type != "unknown":
             # Se è un movimento (singolo o multiplo), gestiscilo con Intent Handler
             if intent.type in ["movement_consumption", "movement_replenishment", "multiple_movements"]:
@@ -812,49 +814,55 @@ async def chat_handler(update, context):
                             f"[BOT] Esecuzione movimento fallita con errore comprensione: '{error_msg}' - "
                             f"Passando all'AI come fallback"
                         )
-                        # NON fare return, continua al fallback AI sotto
+                        intent_found_but_failed = True  # ✅ Flag: intent trovato ma fallito con errore comprensione
+                        # NON fare return, continua al fallback AI sotto (SALTA process_movement_message)
                     else:
                         # Errore tecnico, mostra e termina
                         await update.message.reply_text(f"❌ {error_msg}")
                         return
             
             # Se è un altro intent (ricerca, lista, etc.), gestiscilo normalmente
-            logger.info(
-                f"[BOT] Intent trovato dopo {intent.retry_count} retry: {intent.type} "
-                f"(confidence={intent.confidence:.2f}) - Gestito SENZA AI"
-            )
-            
-            handler = IntentHandler(telegram_id, context)
-            result = await handler.execute_intent(intent)
-            
-            if result.get("success"):
-                await update.message.reply_text(
-                    result.get("formatted_message", "✅ Operazione completata"),
-                    parse_mode='Markdown'
-                )
-                return  # ✅ Successo, termina qui
             else:
-                # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
-                error_msg = result.get("error", "Errore sconosciuto")
+                logger.info(
+                    f"[BOT] Intent trovato dopo {intent.retry_count} retry: {intent.type} "
+                    f"(confidence={intent.confidence:.2f}) - Gestito SENZA AI"
+                )
                 
-                # Controlla se è un errore di comprensione (AI può risolvere)
-                if _is_comprehension_error(error_msg):
-                    logger.info(
-                        f"[BOT] Esecuzione intent fallita con errore comprensione: '{error_msg}' - "
-                        f"Passando all'AI come fallback"
+                handler = IntentHandler(telegram_id, context)
+                result = await handler.execute_intent(intent)
+                
+                if result.get("success"):
+                    await update.message.reply_text(
+                        result.get("formatted_message", "✅ Operazione completata"),
+                        parse_mode='Markdown'
                     )
-                    # NON fare return, continua al fallback AI sotto
+                    return  # ✅ Successo, termina qui
                 else:
-                    # Errore tecnico, mostra e termina
-                    await update.message.reply_text(f"❌ {error_msg}")
-                    return
+                    # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
+                    error_msg = result.get("error", "Errore sconosciuto")
+                    
+                    # Controlla se è un errore di comprensione (AI può risolvere)
+                    if _is_comprehension_error(error_msg):
+                        logger.info(
+                            f"[BOT] Esecuzione intent fallita con errore comprensione: '{error_msg}' - "
+                            f"Passando all'AI come fallback"
+                        )
+                        intent_found_but_failed = True  # ✅ Flag: intent trovato ma fallito con errore comprensione
+                        # NON fare return, continua al fallback AI sotto (SALTA process_movement_message)
+                    else:
+                        # Errore tecnico, mostra e termina
+                        await update.message.reply_text(f"❌ {error_msg}")
+                        return
         
-        # ✅ FALLBACK: Se Intent Classifier non ha riconosciuto, prova process_movement_message (per compatibilità)
-        logger.info(f"[BOT] Intent unknown, provando process_movement_message come fallback...")
-        movement_handled = await inventory_movement_manager.process_movement_message(update, context)
-        if movement_handled:
-            logger.info(f"[BOT] Movement message handled da process_movement_message")
-            return
+        # ✅ FALLBACK: Se Intent Classifier NON ha riconosciuto (intent.type == "unknown")
+        # E NON è un caso di intent trovato ma fallito con errore comprensione
+        # Allora prova process_movement_message (per compatibilità)
+        if not intent_found_but_failed:
+            logger.info(f"[BOT] Intent unknown, provando process_movement_message come fallback...")
+            movement_handled = await inventory_movement_manager.process_movement_message(update, context)
+            if movement_handled:
+                logger.info(f"[BOT] Movement message handled da process_movement_message")
+                return
         
         # ✅ FALLBACK AI: Se intent unknown O se esecuzione intent fallita con errore comprensione
         logger.info(f"[BOT] Passando all'AI come fallback (intent unknown o errore comprensione)")
