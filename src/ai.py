@@ -370,6 +370,7 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
     """
     Processa movimento in modo asincrono.
     Usato quando l'AI rileva un movimento direttamente dal prompt.
+    Fa fuzzy matching per correggere typo nel nome vino.
     """
     try:
         from .processor_client import processor_client
@@ -380,6 +381,27 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
             return "❌ **Errore**: Nome locale non trovato.\nCompleta prima l'onboarding con `/start`."
         
         business_name = user.business_name
+        
+        # ✅ FUZZY MATCHING: Cerca vini simili per correggere typo
+        matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=5)
+        
+        if matching_wines:
+            # Se trova un solo match, usa quello (correzione typo automatica)
+            if len(matching_wines) == 1:
+                corrected_wine_name = matching_wines[0].name
+                logger.info(
+                    f"[AI-MOVEMENT] Fuzzy matching: '{wine_name}' → '{corrected_wine_name}' "
+                    f"(match unico trovato)"
+                )
+                wine_name = corrected_wine_name
+            # Se trova più match, usa il primo (più probabile)
+            else:
+                corrected_wine_name = matching_wines[0].name
+                logger.info(
+                    f"[AI-MOVEMENT] Fuzzy matching: '{wine_name}' → '{corrected_wine_name}' "
+                    f"({len(matching_wines)} match trovati, uso il primo)"
+                )
+                wine_name = corrected_wine_name
         
         # Processa movimento
         result = await processor_client.process_movement(
