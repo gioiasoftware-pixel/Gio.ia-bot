@@ -78,6 +78,69 @@ class IntentClassifier:
         """Classifica movimenti usando pattern esistenti da inventory_movements"""
         flags = 0 if strict else re.IGNORECASE
         
+        # ✅ Cerca movimenti multipli (es. "ho consumato 3 chianti e ricevuto 3 amarone")
+        movements = []
+        
+        # Pattern per separare movimenti multipli (e, poi, e anche, etc.)
+        separators = r'\s+(?:e|poi|e\s+anche|,)\s+'
+        parts = re.split(separators, message, flags=re.IGNORECASE)
+        
+        # Se ci sono più parti, prova a parsare ognuna come movimento
+        if len(parts) > 1:
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                
+                # Cerca consumo in questa parte
+                for pattern in self.movement_manager.consumo_patterns:
+                    match = re.search(pattern, part, flags)
+                    if match:
+                        quantity_str = match.group(1).strip()
+                        wine_name = match.group(2).strip()
+                        quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
+                        if quantity is not None:
+                            movements.append({
+                                "type": "consumption",
+                                "wine_name": wine_name,
+                                "quantity": quantity
+                            })
+                            break
+                
+                # Cerca rifornimento in questa parte
+                for pattern in self.movement_manager.rifornimento_patterns:
+                    match = re.search(pattern, part, flags)
+                    if match:
+                        quantity_str = match.group(1).strip()
+                        wine_name = match.group(2).strip()
+                        quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
+                        if quantity is not None:
+                            movements.append({
+                                "type": "replenishment",
+                                "wine_name": wine_name,
+                                "quantity": quantity
+                            })
+                            break
+            
+            # Se ho trovato movimenti multipli, ritorna intent speciale
+            if len(movements) > 1:
+                return Intent(
+                    type="multiple_movements",
+                    confidence=0.95,
+                    parameters={"movements": movements},
+                    handler="register_multiple_movements"
+                )
+            elif len(movements) == 1:
+                # Un solo movimento trovato, ritorna come movimento singolo
+                m = movements[0]
+                return Intent(
+                    type="movement_consumption" if m["type"] == "consumption" else "movement_replenishment",
+                    confidence=0.9 if strict else 0.7,
+                    parameters={"wine_name": m["wine_name"], "quantity": m["quantity"]},
+                    handler="register_consumption" if m["type"] == "consumption" else "register_replenishment"
+                )
+        
+        # ✅ Se non ho trovato movimenti multipli, cerca movimento singolo (logica originale)
         # Consumi - usa pattern da movement_manager
         for pattern in self.movement_manager.consumo_patterns:
             match = re.search(pattern, message, flags)

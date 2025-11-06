@@ -30,7 +30,11 @@ class IntentHandler:
             f"(handler={intent.handler}, confidence={intent.confidence:.2f})"
         )
         
-        # Importa FunctionExecutor (sarà creato nella Fase 2)
+        # ✅ Gestione movimenti multipli
+        if intent.type == "multiple_movements":
+            return await self._execute_multiple_movements(intent.parameters.get("movements", []))
+        
+        # Importa FunctionExecutor
         try:
             from .function_executor import FunctionExecutor
             
@@ -61,5 +65,78 @@ class IntentHandler:
             return {
                 "success": False,
                 "error": str(e)
+            }
+    
+    async def _execute_multiple_movements(self, movements: list) -> Dict[str, Any]:
+        """Esegue movimenti multipli in sequenza"""
+        from .function_executor import FunctionExecutor
+        from .response_templates import format_movement_confirmation
+        
+        executor = FunctionExecutor(self.telegram_id, self.context)
+        results = []
+        errors = []
+        
+        for i, movement in enumerate(movements, 1):
+            movement_type = movement.get("type")
+            wine_name = movement.get("wine_name")
+            quantity = movement.get("quantity")
+            
+            logger.info(
+                f"[INTENT_HANDLER] Eseguendo movimento {i}/{len(movements)}: "
+                f"{movement_type} {quantity} {wine_name}"
+            )
+            
+            handler = "register_consumption" if movement_type == "consumption" else "register_replenishment"
+            result = await executor.execute_function(handler, {
+                "wine_name": wine_name,
+                "quantity": quantity
+            })
+            
+            if result.get("success"):
+                results.append({
+                    "movement_type": movement_type,
+                    "wine_name": wine_name,
+                    "quantity": quantity,
+                    "result": result
+                })
+            else:
+                errors.append({
+                    "movement_type": movement_type,
+                    "wine_name": wine_name,
+                    "quantity": quantity,
+                    "error": result.get("error", "Errore sconosciuto")
+                })
+        
+        # Formatta risposta combinata
+        if errors:
+            # Se ci sono errori, mostra tutti i risultati
+            lines = ["📋 **Riepilogo Movimenti**", "━" * 30]
+            for r in results:
+                lines.append(
+                    f"✅ {r['movement_type'].capitalize()}: {r['quantity']} {r['wine_name']}"
+                )
+            for e in errors:
+                lines.append(
+                    f"❌ {e['movement_type'].capitalize()}: {e['quantity']} {e['wine_name']} - {e['error']}"
+                )
+            lines.append("━" * 30)
+            return {
+                "success": len(errors) < len(movements),  # Success se almeno uno è riuscito
+                "formatted_message": "\n".join(lines),
+                "used_template": True
+            }
+        else:
+            # Tutti riusciti
+            lines = ["✅ **Movimenti registrati**", "━" * 30]
+            for r in results:
+                result_data = r["result"].get("formatted_message", "")
+                # Estrai info dal template se disponibile
+                lines.append(f"✅ {r['movement_type'].capitalize()}: {r['quantity']} {r['wine_name']}")
+            lines.append("━" * 30)
+            lines.append(f"💾 **{len(results)} movimenti salvati** nel sistema")
+            return {
+                "success": True,
+                "formatted_message": "\n".join(lines),
+                "used_template": True
             }
 
