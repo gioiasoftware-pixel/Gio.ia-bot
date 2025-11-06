@@ -618,10 +618,28 @@ class AsyncDatabaseManager:
             clauses = ["user_id = :user_id"]
             params = {"user_id": user.id, "limit": limit, "offset": offset}
 
+            def normalize_plural(word: str) -> str:
+                """Normalizza plurali italiani comuni per matching più permissivo"""
+                if not word:
+                    return word
+                word_lower = word.lower().strip()
+                # Rimuovi suffissi plurali comuni italiani
+                if word_lower.endswith('i'):
+                    # es. "spumanti" -> "spumant", "rossi" -> "ross"
+                    return word_lower[:-1]
+                elif word_lower.endswith('e'):
+                    # es. "bianche" -> "bianch"
+                    return word_lower[:-1]
+                return word_lower
+
             def add_ilike(field, value):
                 if value:
-                    clauses.append(f"{field} ILIKE :{field}")
-                    params[field] = f"%{value}%"
+                    # Normalizza per gestire plurali (es. "spumanti" matcha "spumante")
+                    normalized = normalize_plural(value)
+                    # Usa pattern che matcha sia singolare che plurale
+                    clauses.append(f"({field} ILIKE :{field}_exact OR {field} ILIKE :{field}_normalized)")
+                    params[f"{field}_exact"] = f"%{value}%"
+                    params[f"{field}_normalized"] = f"%{normalized}%"
 
             add_ilike("region", filters.get("region"))
             add_ilike("country", filters.get("country"))
@@ -831,10 +849,28 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             clauses = ["user_id = :user_id"]
             params = {"user_id": user.id, "limit": limit, "offset": offset}
 
+            def normalize_plural(word: str) -> str:
+                """Normalizza plurali italiani comuni per matching più permissivo"""
+                if not word:
+                    return word
+                word_lower = word.lower().strip()
+                # Rimuovi suffissi plurali comuni italiani
+                if word_lower.endswith('i'):
+                    # es. "spumanti" -> "spumant", "rossi" -> "ross"
+                    return word_lower[:-1]
+                elif word_lower.endswith('e'):
+                    # es. "bianche" -> "bianch"
+                    return word_lower[:-1]
+                return word_lower
+
             def add_ilike(field, value):
                 if value:
-                    clauses.append(f"{field} ILIKE :{field}")
-                    params[field] = f"%{value}%"
+                    # Normalizza per gestire plurali (es. "spumanti" matcha "spumante")
+                    normalized = normalize_plural(value)
+                    # Usa pattern che matcha sia singolare che plurale
+                    clauses.append(f"({field} ILIKE :{field}_exact OR {field} ILIKE :{field}_normalized)")
+                    params[f"{field}_exact"] = f"%{value}%"
+                    params[f"{field}_normalized"] = f"%{normalized}%"
 
             add_ilike("region", filters.get("region"))
             add_ilike("country", filters.get("country"))
