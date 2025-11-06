@@ -132,14 +132,25 @@ def _parse_filters(prompt: str) -> dict:
     filters = {}
     
     # Paese (deve essere prima delle regioni per evitare conflitti)
-    if re.search(r'\bitali[ae]?\b', p):
+    # ✅ Sinonimi estesi per country
+    if re.search(r'\b(itali[ae]?|italy)\b', p):
         filters['country'] = 'Italia'
-    if re.search(r'\bfrances[ei]?\b', p):
+    if re.search(r'\b(frances[ei]?|france)\b', p):
         filters['country'] = 'Francia'
-    if re.search(r'\bspagnol[oi]?\b', p):
+    if re.search(r'\b(spagnol[oi]?|spain)\b', p):
         filters['country'] = 'Spagna'
-    if re.search(r'\btedesc[hi]?\b', p):
+    if re.search(r'\b(tedes[ch]?[hi]?|germany)\b', p):
         filters['country'] = 'Germania'
+    if re.search(r'\b(stati\s+uniti|stati\s+uniti\s+d[\'']?america|america|united\s+states|us\b)\b', p):
+        filters['country'] = 'USA'
+    if re.search(r'\b(portoghes[ei]?|portugal)\b', p):
+        filters['country'] = 'Portogallo'
+    if re.search(r'\b(australian[oi]?|australia)\b', p):
+        filters['country'] = 'Australia'
+    if re.search(r'\b(cilen[oi]?|chile)\b', p):
+        filters['country'] = 'Cile'
+    if re.search(r'\b(argentin[oi]?|argentina)\b', p):
+        filters['country'] = 'Argentina'
     
     # Regioni (solo se non c'è già un filtro paese o se è Italia)
     regions = [
