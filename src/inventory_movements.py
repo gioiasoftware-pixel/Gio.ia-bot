@@ -175,43 +175,43 @@ class InventoryMovementManager:
                 f"full_result_keys={list(result.keys())}"
             )
             
-            # Il processor ritorna status='processing' quando crea il job
-            # ma il job si completa in background, quindi dobbiamo attendere o controllare diversamente
-            if result.get('status') == 'success' or result.get('status') == 'completed':
+            # Se il job è in processing, avvia polling in background
+            if result.get('status') == 'processing' and result.get('job_id'):
+                job_id = result.get('job_id')
+                
+                # Messaggio iniziale
+                await update.message.reply_text(
+                    f"⏳ **Elaborazione in corso...**\n\n"
+                    f"🍷 Registrando consumo di {quantity} bottiglie di {exact_wine_name}...\n\n"
+                    f"Ti invierò un messaggio quando sarà completato."
+                )
+                
+                # Avvia polling in background
+                context.application.create_task(
+                    self._poll_movement_job_and_notify(
+                        telegram_id=telegram_id,
+                        job_id=job_id,
+                        chat_id=update.effective_chat.id,
+                        wine_name=exact_wine_name,
+                        quantity=quantity,
+                        movement_type='consumo',
+                        bot=context.bot
+                    )
+                )
+            elif result.get('status') == 'success' or result.get('status') == 'completed':
+                # Job completato immediatamente (non dovrebbe succedere, ma gestiamo)
                 success_message = (
                     f"✅ **Consumo registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
                     f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
                     f"📉 **Consumate:** {quantity} bottiglie\n\n"
                     f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
             else:
-                # Gestione errori dal job
+                # Gestione errori immediati
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
-                
-                # Cerca messaggi di errore specifici nel result_data
-                if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
-                    await update.message.reply_text(
-                        f"❌ **Vino non trovato**\n\n"
-                        f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                        f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
-                    )
-                elif 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
-                    # Estrai quantità disponibile se presente
-                    available_qty = result.get('available_quantity', 'N/A')
-                    await update.message.reply_text(
-                        f"⚠️ **Quantità insufficiente**\n\n"
-                        f"📦 Disponibili: {available_qty} bottiglie\n"
-                        f"🍷 Richieste: {quantity} bottiglie\n\n"
-                        f"💡 Verifica la quantità o aggiorna l'inventario."
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ **Errore durante l'aggiornamento**\n\n"
-                        f"{error_msg[:200]}\n\n"
-                        f"Riprova più tardi."
-                    )
+                await self._handle_movement_error(update, wine_name, error_msg, quantity)
             
             return True
             
@@ -288,33 +288,49 @@ class InventoryMovementManager:
                 quantity=quantity
             )
             
-            if result.get('status') == 'success':
+            logger.info(
+                f"[MOVEMENT] Processor response received (rifornimento) | "
+                f"telegram_id={telegram_id}, wine_name='{exact_wine_name}' | "
+                f"status={result.get('status')}, job_id={result.get('job_id')}"
+            )
+            
+            # Se il job è in processing, avvia polling in background
+            if result.get('status') == 'processing' and result.get('job_id'):
+                job_id = result.get('job_id')
+                
+                # Messaggio iniziale
+                await update.message.reply_text(
+                    f"⏳ **Elaborazione in corso...**\n\n"
+                    f"🍷 Registrando rifornimento di {quantity} bottiglie di {exact_wine_name}...\n\n"
+                    f"Ti invierò un messaggio quando sarà completato."
+                )
+                
+                # Avvia polling in background
+                context.application.create_task(
+                    self._poll_movement_job_and_notify(
+                        telegram_id=telegram_id,
+                        job_id=job_id,
+                        chat_id=update.effective_chat.id,
+                        wine_name=exact_wine_name,
+                        quantity=quantity,
+                        movement_type='rifornimento',
+                        bot=context.bot
+                    )
+                )
+            elif result.get('status') == 'success' or result.get('status') == 'completed':
+                # Job completato immediatamente
                 success_message = (
                     f"✅ **Rifornimento registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name')}\n"
+                    f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
                     f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
                     f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
                     f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
             else:
-                # Gestione errori dal job
+                # Gestione errori immediati
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
-                
-                # Cerca messaggi di errore specifici nel result_data
-                if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
-                    await update.message.reply_text(
-                        f"❌ **Vino non trovato**\n\n"
-                        f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                        f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
-                        f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ **Errore durante l'aggiornamento**\n\n"
-                        f"{error_msg[:200]}\n\n"
-                        f"Riprova più tardi."
-                    )
+                await self._handle_movement_error(update, wine_name, error_msg, quantity)
             
             return True
             
@@ -322,6 +338,132 @@ class InventoryMovementManager:
             logger.error(f"Errore processamento rifornimento: {e}")
             await update.message.reply_text("❌ Errore durante il processamento. Riprova.")
             return True
+    
+    async def _poll_movement_job_and_notify(
+        self,
+        telegram_id: int,
+        job_id: str,
+        chat_id: int,
+        wine_name: str,
+        quantity: int,
+        movement_type: str,
+        bot
+    ):
+        """
+        Background task per polling job movimento e notifica utente quando completato.
+        Non blocca handler principale.
+        """
+        from .processor_client import processor_client
+        
+        try:
+            # Polling job in background
+            result = await processor_client.wait_for_job_completion(
+                job_id=job_id,
+                max_wait_seconds=300,  # 5 minuti massimo per un movimento
+                poll_interval=2  # Poll ogni 2 secondi (movimenti sono veloci)
+            )
+            
+            # Estrai dati dal campo 'result' annidato se presente
+            result_status = result.get('status')
+            
+            if result_status == 'completed':
+                # Job completato - estrai dati da result
+                result_data = result.get('result', {})
+                
+                # Se result è una stringa JSON, parsala
+                if isinstance(result_data, str):
+                    import json
+                    try:
+                        result_data = json.loads(result_data)
+                    except:
+                        result_data = {}
+                
+                if result_data.get('status') == 'success':
+                    wine_name_result = result_data.get('wine_name', wine_name)
+                    quantity_before = result_data.get('quantity_before', 0)
+                    quantity_after = result_data.get('quantity_after', 0)
+                    
+                    if movement_type == 'consumo':
+                        message = (
+                            f"✅ **Consumo registrato**\n\n"
+                            f"🍷 **Vino:** {wine_name_result}\n"
+                            f"📦 **Quantità:** {quantity_before} → {quantity_after} bottiglie\n"
+                            f"📉 **Consumate:** {quantity} bottiglie\n\n"
+                            f"💾 **Movimento salvato** nel sistema"
+                        )
+                    else:  # rifornimento
+                        message = (
+                            f"✅ **Rifornimento registrato**\n\n"
+                            f"🍷 **Vino:** {wine_name_result}\n"
+                            f"📦 **Quantità:** {quantity_before} → {quantity_after} bottiglie\n"
+                            f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
+                            f"💾 **Movimento salvato** nel sistema"
+                        )
+                    
+                    await bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+                else:
+                    # Job completato ma con errore
+                    error_msg = result_data.get('error', result_data.get('error_message', 'Errore sconosciuto'))
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"❌ **Errore durante l'elaborazione**\n\n{error_msg[:200]}"
+                    )
+            elif result_status == 'failed' or result_status == 'error':
+                # Job fallito
+                error_msg = result.get('error', 'Errore sconosciuto')
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ **Movimento fallito**\n\n{error_msg[:200]}"
+                )
+            elif result_status == 'timeout':
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏱️ **Timeout**\n\nIl movimento sta impiegando più tempo del previsto. Verifica lo stato più tardi."
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ **Stato sconosciuto**\n\nIl movimento è in stato: {result_status}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Errore in _poll_movement_job_and_notify per job {job_id}: {e}", exc_info=True)
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ **Errore durante il polling**\n\nSi è verificato un errore. Controlla lo stato del movimento più tardi."
+                )
+            except:
+                pass
+    
+    async def _handle_movement_error(
+        self,
+        update: Update,
+        wine_name: str,
+        error_msg: str,
+        quantity: int
+    ):
+        """Gestisce errori durante i movimenti"""
+        # Cerca messaggi di errore specifici nel result_data
+        if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
+            await update.message.reply_text(
+                f"❌ **Vino non trovato**\n\n"
+                f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
+                f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
+                f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
+            )
+        elif 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
+            await update.message.reply_text(
+                f"⚠️ **Quantità insufficiente**\n\n"
+                f"🍷 Richieste: {quantity} bottiglie\n\n"
+                f"💡 Verifica la quantità disponibile con `/inventario`."
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ **Errore durante l'aggiornamento**\n\n"
+                f"{error_msg[:200]}\n\n"
+                f"Riprova più tardi."
+            )
     
     def _find_matching_wine(self, wines: List, wine_name: str) -> Optional[Any]:
         """Trova un vino che corrisponde al nome dato"""
