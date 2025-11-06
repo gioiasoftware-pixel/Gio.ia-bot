@@ -1763,7 +1763,8 @@ def main():
                 if result.get('ok'):
                     logger.info("✅ Webhook eliminato con successo via API")
                     # Usa asyncio per sleep anche in contesto sync (durante avvio)
-                    asyncio.run(asyncio.sleep(2))  # Attendi 2 secondi per permettere a Telegram di processare
+                    import time
+                    time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
                 else:
                     description = result.get('description', 'Unknown error')
                     logger.warning(f"⚠️ Risposta API: {description}")
@@ -1799,14 +1800,17 @@ def main():
                             if not loop.is_running():
                                 asyncio.run(_delete_webhook_retry())
                                 # Usa asyncio per sleep anche in contesto sync
-                                asyncio.run(asyncio.sleep(3))
+                                import time
+                                time.sleep(3)
                         except RuntimeError:
                             asyncio.run(_delete_webhook_retry())
-                            asyncio.run(asyncio.sleep(3))
+                            import time
+                            time.sleep(3)
                     except Exception as e2:
                         logger.warning(f"⚠️ Errore eliminazione webhook al retry: {e2}")
                     else:
-                        asyncio.run(asyncio.sleep(5))  # Attendi 5 secondi tra i tentativi
+                        import time
+                        time.sleep(5)  # Attendi 5 secondi tra i tentativi
                 else:
                     logger.info("🔄 Avvio polling...")
                 

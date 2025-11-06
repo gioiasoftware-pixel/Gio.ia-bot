@@ -383,7 +383,44 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
         business_name = user.business_name
         
         # ✅ FUZZY MATCHING: Cerca vini simili per correggere typo
-        matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=5)
+        # Prima prova ricerca normale
+        matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
+        
+        if not matching_wines:
+            # Se non trova match, prova ricerca più permissiva (primi caratteri)
+            # Es. "soaver" → cerca "soav"
+            if len(wine_name) >= 4:
+                short_search = wine_name[:4].lower()
+                matching_wines = await async_db_manager.search_wines(telegram_id, short_search, limit=10)
+        
+        # Se ancora non trova, usa rapidfuzz per fuzzy matching su tutti i vini
+        if not matching_wines:
+            try:
+                from rapidfuzz import fuzz, process
+                all_wines = await async_db_manager.get_user_wines(telegram_id)
+                
+                if all_wines:
+                    # Cerca il vino più simile usando rapidfuzz
+                    wine_names = [w.name for w in all_wines]
+                    best_match = process.extractOne(
+                        wine_name,
+                        wine_names,
+                        scorer=fuzz.WRatio,  # Weighted Ratio (migliore per typo)
+                        score_cutoff=70  # Minimo 70% di similarità
+                    )
+                    
+                    if best_match:
+                        matched_name, score, _ = best_match
+                        logger.info(
+                            f"[AI-MOVEMENT] Fuzzy matching rapidfuzz: '{wine_name}' → '{matched_name}' "
+                            f"(similarità: {score:.1f}%)"
+                        )
+                        # Trova il vino corrispondente
+                        matching_wines = [w for w in all_wines if w.name == matched_name]
+            except ImportError:
+                logger.warning("[AI-MOVEMENT] rapidfuzz non disponibile, salto fuzzy matching avanzato")
+            except Exception as e:
+                logger.error(f"[AI-MOVEMENT] Errore fuzzy matching rapidfuzz: {e}")
         
         if matching_wines:
             # Se trova un solo match, usa quello (correzione typo automatica)
