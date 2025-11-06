@@ -212,6 +212,48 @@ class IntentClassifier:
                 parameters={}
             )
         
+        # Pattern "che X ho?" dove X può essere tipo vino, paese, regione (es. "che rossi ho?", "che bianchi ho?")
+        che_pattern = r'\b(che|quali)\s+(.+?)\s+(?:ho|hai|ci sono|in cantina|in magazzino)'
+        match = re.search(che_pattern, message, re.IGNORECASE)
+        if match:
+            descriptor = match.group(2).strip().lower()
+            filters = {}
+            
+            # Controlla tipo di vino
+            if descriptor in wine_types:
+                filters["wine_type"] = wine_types[descriptor]
+                return Intent(
+                    type="search_wines",
+                    confidence=0.95,  # Alta confidenza per pattern "che X ho?"
+                    parameters={"filters": filters, "limit": 50},
+                    handler="search_wines"
+                )
+            
+            # Controlla paese
+            for synonym, country in country_synonyms.items():
+                if synonym in descriptor:
+                    filters["country"] = country
+                    return Intent(
+                        type="search_wines",
+                        confidence=0.95,
+                        parameters={"filters": filters, "limit": 50},
+                        handler="search_wines"
+                    )
+            
+            # Controlla regione
+            for synonym, region in italian_regions.items():
+                if synonym in descriptor:
+                    filters["region"] = region
+                    return Intent(
+                        type="search_wines",
+                        confidence=0.95,
+                        parameters={"filters": filters, "limit": 50},
+                        handler="search_wines"
+                    )
+            
+            # Se non riconosce, passa all'AI
+            return Intent(type="unknown", confidence=0.0, parameters={})
+        
         # Pattern "vini X" o "X vini" (es. "vini italiani", "vini della toscana")
         wine_pattern = r'\b(vini|vino)\s+(.+?)(?:\s|$)'
         match = re.search(wine_pattern, message, re.IGNORECASE)
