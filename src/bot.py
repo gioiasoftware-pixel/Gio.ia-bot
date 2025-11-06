@@ -711,28 +711,41 @@ async def chat_handler(update, context):
         except Exception:
             pass
         
-        # Gestisci movimenti inventario
-        logger.info(f"[BOT] Calling process_movement_message for: {user_text[:50]}...")
-        movement_handled = await inventory_movement_manager.process_movement_message(update, context)
-        if movement_handled:
-            logger.info(f"[BOT] Movement message handled, not passing to AI")
-            return
-        else:
-            logger.info(f"[BOT] Movement message NOT handled, passing to AI")
-        
         # Gestisci aggiunta vino se in corso - ASYNC
         if await inventory_manager.handle_wine_data(update, context):
             return
         
-        # ✅ NUOVO: Intent Classifier (NO AI) - 5 Retry
+        # ✅ NUOVO: Intent Classifier (NO AI) - 5 Retry (PRIMA di process_movement_message per gestire movimenti multipli)
         from .intent_classifier import IntentClassifier
         from .intent_handler import IntentHandler
         
         intent_classifier = IntentClassifier()
         intent = await intent_classifier.classify_with_retry(user_text, telegram_id)
         
-        # Se intent trovato, esegui direttamente (NO AI)
+        # Se intent trovato (inclusi movimenti multipli), esegui direttamente (NO AI, NO process_movement_message)
         if intent.type != "unknown":
+            # Se è un movimento (singolo o multiplo), gestiscilo con Intent Handler
+            if intent.type in ["movement_consumption", "movement_replenishment", "multiple_movements"]:
+                logger.info(
+                    f"[BOT] Movimento riconosciuto: {intent.type} "
+                    f"(confidence={intent.confidence:.2f}) - Gestito con Intent Handler"
+                )
+                
+                handler = IntentHandler(telegram_id, context)
+                result = await handler.execute_intent(intent)
+                
+                if result.get("success"):
+                    await update.message.reply_text(
+                        result.get("formatted_message", "✅ Operazione completata"),
+                        parse_mode='Markdown'
+                    )
+                else:
+                    error_msg = result.get("error", "Errore sconosciuto")
+                    await update.message.reply_text(f"❌ {error_msg}")
+                
+                return  # END - NO AI chiamata, NO process_movement_message ✅
+            
+            # Se è un altro intent (ricerca, lista, etc.), gestiscilo normalmente
             logger.info(
                 f"[BOT] Intent trovato dopo {intent.retry_count} retry: {intent.type} "
                 f"(confidence={intent.confidence:.2f}) - Gestito SENZA AI"
@@ -751,6 +764,13 @@ async def chat_handler(update, context):
                 await update.message.reply_text(f"❌ {error_msg}")
             
             return  # END - NO AI chiamata ✅
+        
+        # ✅ FALLBACK: Se Intent Classifier non ha riconosciuto, prova process_movement_message (per compatibilità)
+        logger.info(f"[BOT] Intent unknown, provando process_movement_message come fallback...")
+        movement_handled = await inventory_movement_manager.process_movement_message(update, context)
+        if movement_handled:
+            logger.info(f"[BOT] Movement message handled da process_movement_message")
+            return
         
         # Se intent unknown dopo 5 retry, usa AI (FALLBACK)
         logger.info(f"[BOT] Intent unknown dopo 5 retry, usando AI (fallback)")

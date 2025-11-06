@@ -114,19 +114,21 @@ class IntentClassifier:
             
             # Se ho trovato tipo movimento, parsare tutte le parti
             if movement_type:
-                # Pattern per estrarre quantità e nome vino
+                # Pattern per estrarre quantità e nome vino (migliorato per catturare anche "1 soave")
                 # Es. "3 marlborough" → quantity=3, wine="marlborough"
-                # Es. "2 soave" → quantity=2, wine="soave"
+                # Es. "1 soave" → quantity=1, wine="soave"
                 # Es. "soave" → quantity=None, wine="soave"
                 quantity_wine_pattern = r'^(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)\s+(.+)$'
                 
-                for part in parts:
+                for i, part in enumerate(parts):
                     part = part.strip()
                     if not part:
                         continue
                     
                     # Rimuovi verbo movimento se presente (es. "ho consumato 3 marlborough" → "3 marlborough")
-                    part = re.sub(r'^(ho\s+)?(consumato|venduto|bevuto|ricevuto|comprato|aggiunto)\s+', '', part, flags=re.IGNORECASE).strip()
+                    # Solo dalla prima parte
+                    if i == 0:
+                        part = re.sub(r'^(ho\s+)?(consumato|venduto|bevuto|ricevuto|comprato|aggiunto)\s+', '', part, flags=re.IGNORECASE).strip()
                     
                     # Prova a estrarre quantità e vino
                     match = re.search(quantity_wine_pattern, part, re.IGNORECASE)
@@ -134,7 +136,7 @@ class IntentClassifier:
                         quantity_str = match.group(1).strip()
                         wine_name = match.group(2).strip()
                         quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
-                        if quantity is not None:
+                        if quantity is not None and wine_name:
                             movements.append({
                                 "type": movement_type,
                                 "wine_name": wine_name,
@@ -144,13 +146,14 @@ class IntentClassifier:
                     
                     # Se non ha quantità, potrebbe essere solo nome vino
                     # Controlla se è un nome vino valido (almeno 3 caratteri, non parole comuni)
-                    common_words = {'e', 'poi', 'anche', 'ho', 'consumato', 'ricevuto', 'comprato', 'aggiunto', 'venduto', 'bevuto'}
-                    if len(part) >= 3 and part.lower() not in common_words:
+                    common_words = {'e', 'poi', 'anche', 'ho', 'consumato', 'ricevuto', 'comprato', 'aggiunto', 'venduto', 'bevuto', 'e', 'e anche'}
+                    part_clean = part.lower().strip()
+                    if len(part_clean) >= 3 and part_clean not in common_words:
                         # Usa quantità default 1 (o quantità del primo movimento se disponibile)
                         default_quantity = movements[0]["quantity"] if movements else 1
                         movements.append({
                             "type": movement_type,
-                            "wine_name": part,
+                            "wine_name": part,  # Mantieni case originale
                             "quantity": default_quantity
                         })
             
