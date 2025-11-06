@@ -724,6 +724,37 @@ async def chat_handler(update, context):
         if await inventory_manager.handle_wine_data(update, context):
             return
         
+        # ✅ NUOVO: Intent Classifier (NO AI) - 5 Retry
+        from .intent_classifier import IntentClassifier
+        from .intent_handler import IntentHandler
+        
+        intent_classifier = IntentClassifier()
+        intent = await intent_classifier.classify_with_retry(user_text, telegram_id)
+        
+        # Se intent trovato, esegui direttamente (NO AI)
+        if intent.type != "unknown":
+            logger.info(
+                f"[BOT] Intent trovato dopo {intent.retry_count} retry: {intent.type} "
+                f"(confidence={intent.confidence:.2f}) - Gestito SENZA AI"
+            )
+            
+            handler = IntentHandler(telegram_id, context)
+            result = await handler.execute_intent(intent)
+            
+            if result.get("success"):
+                await update.message.reply_text(
+                    result.get("formatted_message", "✅ Operazione completata"),
+                    parse_mode='Markdown'
+                )
+            else:
+                error_msg = result.get("error", "Errore sconosciuto")
+                await update.message.reply_text(f"❌ {error_msg}")
+            
+            return  # END - NO AI chiamata ✅
+        
+        # Se intent unknown dopo 5 retry, usa AI (FALLBACK)
+        logger.info(f"[BOT] Intent unknown dopo 5 retry, usando AI (fallback)")
+        
         await update.message.reply_text("💭 Sto pensando...")
         
         # Chiama AI con contesto utente (async)

@@ -902,6 +902,66 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 }
             }
         })
+        # ✅ NUOVI TOOL: Movimenti e funzioni aggiuntive
+        tools.extend([
+            {
+                "type": "function",
+                "function": {
+                    "name": "register_consumption",
+                    "description": "Registra un consumo (vendita/consumo) di bottiglie. Diminuisce la quantità disponibile del vino specificato.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_name": {"type": "string", "description": "Nome del vino da consumare"},
+                            "quantity": {"type": "integer", "description": "Numero di bottiglie consumate (deve essere positivo)"}
+                        },
+                        "required": ["wine_name", "quantity"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "register_replenishment",
+                    "description": "Registra un rifornimento (acquisto/aggiunta) di bottiglie. Aumenta la quantità disponibile del vino specificato.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_name": {"type": "string", "description": "Nome del vino da rifornire"},
+                            "quantity": {"type": "integer", "description": "Numero di bottiglie aggiunte (deve essere positivo)"}
+                        },
+                        "required": ["wine_name", "quantity"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_low_stock_wines",
+                    "description": "Ottiene lista vini con scorte basse (quantità inferiore alla soglia). Utile per identificare vini da rifornire.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "threshold": {"type": "integer", "description": "Soglia minima quantità (vini con quantità < threshold vengono segnalati)", "default": 5}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_wine_details",
+                    "description": "Ottiene dettagli completi di un vino specifico: nome, produttore, annata, quantità, prezzo, regione, tipo, etc.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wine_id": {"type": "integer", "description": "ID del vino di cui ottenere i dettagli"}
+                        },
+                        "required": ["wine_id"]
+                    }
+                }
+            }
+        ])
 
         # Chiamata API con gestione errori robusta
         try:
@@ -961,7 +1021,37 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
 
             logger.info(f"[TOOLS] AI ha richiesto tool: {name} args={args}")
 
-            # Implementazioni tool
+            # ✅ USA FUNCTION EXECUTOR (centralizzato)
+            try:
+                from .function_executor import FunctionExecutor
+                
+                # Crea executor (context non disponibile in ai.py, passa None)
+                executor = FunctionExecutor(telegram_id, None)
+                result = await executor.execute_function(name, args)
+                
+                # ✅ Se template disponibile, usa direttamente (NO re-chiamata AI)
+                if result.get("use_template") and result.get("formatted_message"):
+                    logger.info(f"[TOOLS] Risposta formattata con template (NO re-chiamata AI)")
+                    return result["formatted_message"]
+                
+                # Se success ma no template, ritorna messaggio di successo
+                if result.get("success"):
+                    return result.get("formatted_message", result.get("message", "✅ Operazione completata"))
+                
+                # Se errore, ritorna messaggio errore
+                error_msg = result.get("error", "Errore sconosciuto")
+                return f"❌ {error_msg}"
+                
+            except ImportError:
+                # FunctionExecutor non disponibile, usa fallback inline (compatibilità)
+                logger.warning(f"[TOOLS] FunctionExecutor non disponibile, usando fallback inline")
+                pass
+            except Exception as e:
+                logger.error(f"[TOOLS] Errore FunctionExecutor: {e}", exc_info=True)
+                # Fallback a logica inline
+                pass
+            
+            # ✅ FALLBACK: Implementazioni tool inline (per compatibilità)
             if name == "get_inventory_list":
                 limit = int(args.get("limit", 50))
                 return await _build_inventory_list_response(telegram_id, limit=limit)
@@ -1028,6 +1118,10 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 except Exception as e:
                     logger.error(f"Errore get_movement_summary tool: {e}")
                     return "⚠️ Errore nel calcolo dei movimenti. Riprova."
+            
+            # Tool non riconosciuto
+            logger.warning(f"[TOOLS] Tool '{name}' non riconosciuto nel fallback")
+            return f"⚠️ Funzione '{name}' non ancora implementata."
 
         # Nessuna tool call: usa il contenuto generato
         content = getattr(message, "content", "") or ""
@@ -1044,3 +1138,6 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
         logger.error(f"Tipo errore: {type(e).__name__}")
         logger.error(f"Prompt ricevuto: {prompt[:100]}...")
         return "⚠️ Errore temporaneo dell'AI. Riprova tra qualche minuto."
+
+
+
