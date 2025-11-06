@@ -87,40 +87,84 @@ class IntentClassifier:
         
         # Se ci sono più parti, prova a parsare ognuna come movimento
         if len(parts) > 1:
-            for part in parts:
-                part = part.strip()
-                if not part:
-                    continue
-                
-                # Cerca consumo in questa parte
-                for pattern in self.movement_manager.consumo_patterns:
-                    match = re.search(pattern, part, flags)
-                    if match:
-                        quantity_str = match.group(1).strip()
-                        wine_name = match.group(2).strip()
-                        quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
-                        if quantity is not None:
-                            movements.append({
-                                "type": "consumption",
-                                "wine_name": wine_name,
-                                "quantity": quantity
-                            })
-                            break
-                
-                # Cerca rifornimento in questa parte
+            # Cerca il primo movimento completo nel messaggio originale
+            first_movement = None
+            first_movement_type = None
+            first_quantity = None
+            
+            # Cerca consumo nel messaggio originale
+            for pattern in self.movement_manager.consumo_patterns:
+                match = re.search(pattern, message, flags)
+                if match:
+                    quantity_str = match.group(1).strip()
+                    wine_name = match.group(2).strip()
+                    quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
+                    if quantity is not None:
+                        first_movement = wine_name
+                        first_movement_type = "consumption"
+                        first_quantity = quantity
+                        movements.append({
+                            "type": "consumption",
+                            "wine_name": wine_name,
+                            "quantity": quantity
+                        })
+                        break
+            
+            # Cerca rifornimento nel messaggio originale
+            if not first_movement:
                 for pattern in self.movement_manager.rifornimento_patterns:
-                    match = re.search(pattern, part, flags)
+                    match = re.search(pattern, message, flags)
                     if match:
                         quantity_str = match.group(1).strip()
                         wine_name = match.group(2).strip()
                         quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
                         if quantity is not None:
+                            first_movement = wine_name
+                            first_movement_type = "replenishment"
+                            first_quantity = quantity
                             movements.append({
                                 "type": "replenishment",
                                 "wine_name": wine_name,
                                 "quantity": quantity
                             })
                             break
+            
+            # Se ho trovato un primo movimento, cerca altri vini nelle parti rimanenti
+            if first_movement:
+                # Pattern per estrarre quantità e nome vino da una parte
+                # Es. "2 soave" → quantity=2, wine="soave"
+                # Es. "sassicaia" → quantity=None, wine="sassicaia"
+                quantity_wine_pattern = r'^(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)\s+(.+)$'
+                
+                for part in parts[1:]:  # Skip prima parte (già processata)
+                    part = part.strip()
+                    if not part:
+                        continue
+                    
+                    # Prova a estrarre quantità e vino
+                    match = re.search(quantity_wine_pattern, part, re.IGNORECASE)
+                    if match:
+                        quantity_str = match.group(1).strip()
+                        wine_name = match.group(2).strip()
+                        quantity = int(quantity_str) if quantity_str.isdigit() else self.word_to_number(quantity_str)
+                        if quantity is not None:
+                            movements.append({
+                                "type": first_movement_type,  # Usa stesso tipo del primo movimento
+                                "wine_name": wine_name,
+                                "quantity": quantity
+                            })
+                            continue
+                    
+                    # Se non ha quantità, potrebbe essere solo nome vino
+                    # Controlla se è un nome vino valido (almeno 3 caratteri, non parole comuni)
+                    common_words = {'e', 'poi', 'anche', 'ho', 'consumato', 'ricevuto', 'comprato', 'aggiunto'}
+                    if len(part) >= 3 and part.lower() not in common_words:
+                        # Usa quantità del primo movimento o default 1
+                        movements.append({
+                            "type": first_movement_type,
+                            "wine_name": part,
+                            "quantity": first_quantity if first_quantity else 1
+                        })
             
             # Se ho trovato movimenti multipli, ritorna intent speciale
             if len(movements) > 1:
