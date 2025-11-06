@@ -11,39 +11,88 @@ from .database_async import async_db_manager
 
 logger = logging.getLogger(__name__)
 
+
+def word_to_number(word: str) -> Optional[int]:
+    """
+    Converte numero in lettere italiano in numero intero.
+    Supporta numeri comuni da 1 a 20 e multipli di 10 fino a 100.
+    """
+    word_lower = word.lower().strip()
+    
+    # Dizionario numeri in lettere
+    numbers_map = {
+        # 1-20
+        'un': 1, 'uno': 1, 'una': 1,
+        'due': 2,
+        'tre': 3,
+        'quattro': 4,
+        'cinque': 5,
+        'sei': 6,
+        'sette': 7,
+        'otto': 8,
+        'nove': 9,
+        'dieci': 10,
+        'undici': 11,
+        'dodici': 12,
+        'tredici': 13,
+        'quattordici': 14,
+        'quindici': 15,
+        'sedici': 16,
+        'diciassette': 17,
+        'diciotto': 18,
+        'diciannove': 19,
+        'venti': 20,
+        # Multipli di 10
+        'trenta': 30,
+        'quaranta': 40,
+        'cinquanta': 50,
+        'sessanta': 60,
+        'settanta': 70,
+        'ottanta': 80,
+        'novanta': 90,
+        'cento': 100
+    }
+    
+    return numbers_map.get(word_lower)
+
+
 class InventoryMovementManager:
     """Gestore movimenti inventario"""
     
     def __init__(self):
+        # Pattern per riconoscere movimenti con numeri (cifre o lettere)
+        # Pattern alternativi: (\d+) per numeri, (un|uno|una|due|tre|...) per lettere
+        number_pattern = r'(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)'
+        
         # Pattern per riconoscere movimenti (ordinati dalla più specifica alla più generica)
         self.consumo_patterns = [
-            r'ho venduto (\d+) bottiglie? di (.+)',
-            r'ho consumato (\d+) bottiglie? di (.+)',
-            r'ho bevuto (\d+) bottiglie? di (.+)',
-            r'ho venduto (\d+) (.+)',  # Senza "bottiglie di"
-            r'ho consumato (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
-            r'ho bevuto (\d+) (.+)',    # Senza "bottiglie di"
-            r'venduto (\d+) (.+)',
-            r'consumato (\d+) (.+)',
-            r'bevuto (\d+) (.+)',
-            r'(\d+) bottiglie? di (.+) vendute?',
-            r'(\d+) bottiglie? di (.+) consumate?',
-            r'(\d+) bottiglie? di (.+) bevute?'
+            r'ho venduto ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho consumato ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho bevuto ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho venduto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
+            r'ho consumato ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
+            r'ho bevuto ' + number_pattern + r' (.+)',    # Senza "bottiglie di"
+            r'venduto ' + number_pattern + r' (.+)',
+            r'consumato ' + number_pattern + r' (.+)',
+            r'bevuto ' + number_pattern + r' (.+)',
+            number_pattern + r' bottiglie? di (.+) vendute?',
+            number_pattern + r' bottiglie? di (.+) consumate?',
+            number_pattern + r' bottiglie? di (.+) bevute?'
         ]
         
         self.rifornimento_patterns = [
-            r'ho ricevuto (\d+) bottiglie? di (.+)',
-            r'ho comprato (\d+) bottiglie? di (.+)',
-            r'ho aggiunto (\d+) bottiglie? di (.+)',
-            r'ho ricevuto (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
-            r'ho comprato (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
-            r'ho aggiunto (\d+) (.+)',  # Senza "bottiglie di" - FIX: aggiunto
-            r'ricevuto (\d+) (.+)',
-            r'comprato (\d+) (.+)',
-            r'aggiunto (\d+) (.+)',
-            r'(\d+) bottiglie? di (.+) ricevute?',
-            r'(\d+) bottiglie? di (.+) comprate?',
-            r'(\d+) bottiglie? di (.+) aggiunte?'
+            r'ho ricevuto ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho comprato ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho aggiunto ' + number_pattern + r' bottiglie? di (.+)',
+            r'ho ricevuto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
+            r'ho comprato ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
+            r'ho aggiunto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
+            r'ricevuto ' + number_pattern + r' (.+)',
+            r'comprato ' + number_pattern + r' (.+)',
+            r'aggiunto ' + number_pattern + r' (.+)',
+            number_pattern + r' bottiglie? di (.+) ricevute?',
+            number_pattern + r' bottiglie? di (.+) comprate?',
+            number_pattern + r' bottiglie? di (.+) aggiunte?'
         ]
     
     async def process_movement_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -83,20 +132,40 @@ class InventoryMovementManager:
         
         # Cerca pattern di consumo
         for pattern in self.consumo_patterns:
-            match = re.search(pattern, message_text)
+            match = re.search(pattern, message_text, re.IGNORECASE)
             if match:
-                quantity = int(match.group(1))
+                quantity_str = match.group(1).strip()
                 wine_name = match.group(2).strip()
-                logger.info(f"Matched consumo pattern: '{pattern}' -> quantity={quantity}, wine={wine_name}")
+                
+                # Converti quantità (numero o parola) in intero
+                if quantity_str.isdigit():
+                    quantity = int(quantity_str)
+                else:
+                    quantity = word_to_number(quantity_str)
+                    if quantity is None:
+                        logger.warning(f"Numero in lettere non riconosciuto: '{quantity_str}'")
+                        continue
+                
+                logger.info(f"Matched consumo pattern: '{pattern}' -> quantity={quantity} (from '{quantity_str}'), wine={wine_name}")
                 return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
         
         # Cerca pattern di rifornimento
         for pattern in self.rifornimento_patterns:
-            match = re.search(pattern, message_text)
+            match = re.search(pattern, message_text, re.IGNORECASE)
             if match:
-                quantity = int(match.group(1))
+                quantity_str = match.group(1).strip()
                 wine_name = match.group(2).strip()
-                logger.info(f"Matched rifornimento pattern: '{pattern}' -> quantity={quantity}, wine={wine_name}")
+                
+                # Converti quantità (numero o parola) in intero
+                if quantity_str.isdigit():
+                    quantity = int(quantity_str)
+                else:
+                    quantity = word_to_number(quantity_str)
+                    if quantity is None:
+                        logger.warning(f"Numero in lettere non riconosciuto: '{quantity_str}'")
+                        continue
+                
+                logger.info(f"Matched rifornimento pattern: '{pattern}' -> quantity={quantity} (from '{quantity_str}'), wine={wine_name}")
                 return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
         
         logger.debug(f"No movement pattern matched for message: {message_text}")
