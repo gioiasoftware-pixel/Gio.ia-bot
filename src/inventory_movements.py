@@ -255,12 +255,22 @@ class InventoryMovementManager:
                     f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
+                return True
             else:
                 # Gestione errori immediati
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                # ✅ Se è un errore di comprensione, NON mostrare errore qui, ritorna False per passare all'AI
+                if self._is_comprehension_error(error_msg):
+                    logger.info(
+                        f"[MOVEMENT] Errore comprensione in process_movement_message: '{error_msg}' - "
+                        f"Ritorno False per passare all'AI"
+                    )
+                    return False  # ✅ Passa all'AI come fallback
+                
+                # Errore tecnico, mostra e termina
                 await self._handle_movement_error(update, wine_name, error_msg, quantity)
-            
-            return True
+                return True
             
         except Exception as e:
             logger.error(
@@ -352,12 +362,22 @@ class InventoryMovementManager:
                     f"💾 **Movimento salvato** nel sistema"
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
+                return True
             else:
                 # Gestione errori immediati
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                
+                # ✅ Se è un errore di comprensione, NON mostrare errore qui, ritorna False per passare all'AI
+                if self._is_comprehension_error(error_msg):
+                    logger.info(
+                        f"[MOVEMENT] Errore comprensione in process_movement_message: '{error_msg}' - "
+                        f"Ritorno False per passare all'AI"
+                    )
+                    return False  # ✅ Passa all'AI come fallback
+                
+                # Errore tecnico, mostra e termina
                 await self._handle_movement_error(update, wine_name, error_msg, quantity)
-            
-            return True
+                return True
             
         except Exception as e:
             logger.error(f"Errore processamento rifornimento: {e}")
@@ -512,6 +532,56 @@ class InventoryMovementManager:
                 f"{error_msg[:200]}\n\n"
                 f"Riprova più tardi."
             )
+    
+    def _is_comprehension_error(self, error_msg: str) -> bool:
+        """
+        Identifica se un errore è un errore di comprensione (AI può risolvere).
+        Stessa logica di bot.py per coerenza.
+        """
+        if not error_msg:
+            return False
+        
+        error_lower = error_msg.lower()
+        
+        # Errori di comprensione (AI può risolvere)
+        comprehension_indicators = [
+            "wine not found",
+            "vino non trovato",
+            "non ho trovato",
+            "non trovato",
+            "not found",
+            "nessun vino",
+            "nessun risultato",
+            "no results",
+            "errore sconosciuto",
+        ]
+        
+        # Errori tecnici (NON passare all'AI)
+        technical_indicators = [
+            "business name non trovato",
+            "business name non configurato",
+            "onboarding",
+            "timeout",
+            "http error",
+            "http client error",
+            "connection error",
+            "errore connessione",
+            "nome vino o quantità non validi",
+            "quantità non valida",
+            "telegram_id non trovato",
+        ]
+        
+        # Controlla prima errori tecnici (priorità)
+        for indicator in technical_indicators:
+            if indicator in error_lower:
+                return False
+        
+        # Controlla errori di comprensione
+        for indicator in comprehension_indicators:
+            if indicator in error_lower:
+                return True
+        
+        return False
     
     def _find_matching_wine(self, wines: List, wine_name: str) -> Optional[Any]:
         """Trova un vino che corrisponde al nome dato"""
