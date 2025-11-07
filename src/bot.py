@@ -1443,8 +1443,8 @@ async def viewer_link_ready_handler(request):
                 telegram_id=telegram_id if telegram_id else 0,
                 correlation_id=correlation_id
             )
-            return web.Response(
-                json={"status": "error", "message": "telegram_id e viewer_url richiesti"},
+            return web.json_response(
+                {"status": "error", "message": "telegram_id e viewer_url richiesti"},
                 status=400
             )
         
@@ -1489,15 +1489,15 @@ async def viewer_link_ready_handler(request):
                     correlation_id=correlation_id
                 )
         
-        return web.Response(
-            json={"status": "success", "message": "Link ricevuto e processato"},
+        return web.json_response(
+            {"status": "success", "message": "Link ricevuto e processato"},
             status=200
         )
         
     except Exception as e:
         logger.error(f"[VIEWER_CALLBACK] Errore gestione callback: {e}", exc_info=True)
-        return web.Response(
-            json={"status": "error", "message": str(e)},
+        return web.json_response(
+            {"status": "error", "message": str(e)},
             status=500
         )
 
