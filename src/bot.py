@@ -437,16 +437,16 @@ async def view_cmd(update, context):
             
             if viewer_url:
                 # Modifica il messaggio con il link
-        final_message = (
-            "<b>🌐 Link Visualizzazione Inventario</b>\n\n"
-            "📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-            f'<a href="{viewer_url}">🔗 Apri Viewer</a>\n\n'
-            "⏰ <b>Validità:</b> 1 ora\n"
-            "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
-            f"📊 <b>Vini nel tuo inventario:</b> {len(user_wines)}"
-        )
-        
-        await loading_message.edit_text(final_message, parse_mode=ParseMode.HTML)
+                final_message = (
+                    "<b>🌐 Link Visualizzazione Inventario</b>\n\n"
+                    "📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+                    f'<a href="{viewer_url}">🔗 Apri Viewer</a>\n\n'
+                    "⏰ <b>Validità:</b> 1 ora\n"
+                    "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
+                    f"📊 <b>Vini nel tuo inventario:</b> {len(user_wines)}"
+                )
+                
+                await loading_message.edit_text(final_message, parse_mode=ParseMode.HTML)
                 
                 log_with_context(
                     "info",
