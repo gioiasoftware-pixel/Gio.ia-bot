@@ -10,6 +10,7 @@ from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from .logging_config import setup_colored_logging
 
 # Configurazione logging colorato
@@ -436,16 +437,16 @@ async def view_cmd(update, context):
             
             if viewer_url:
                 # Modifica il messaggio con il link
-                final_message = (
-                    f"🌐 **Link Visualizzazione Inventario**\n\n"
-                    f"📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-                    f"🔗 {viewer_url}\n\n"
-                    f"⏰ **Validità:** 1 ora\n"
-                    f"💡 Se il link scade, usa `/view` per generarne uno nuovo.\n\n"
-                    f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
-                )
-                
-                await loading_message.edit_text(final_message, parse_mode='Markdown')
+        final_message = (
+            "<b>🌐 Link Visualizzazione Inventario</b>\n\n"
+            "📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
+            f'<a href="{viewer_url}">🔗 Apri Viewer</a>\n\n'
+            "⏰ <b>Validità:</b> 1 ora\n"
+            "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
+            f"📊 <b>Vini nel tuo inventario:</b> {len(user_wines)}"
+        )
+        
+        await loading_message.edit_text(final_message, parse_mode=ParseMode.HTML)
                 
                 log_with_context(
                     "info",
