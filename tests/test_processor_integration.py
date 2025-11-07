@@ -94,3 +94,6 @@ class TestProcessorIntegration:
         with patch("aiohttp.ClientSession.get", return_value=mock_ctx):
             res = await client.get_job_status("job-123")
             assert res.get("status") == "completed"
+
+
+

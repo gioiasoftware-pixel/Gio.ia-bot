@@ -314,10 +314,10 @@ async def view_cmd(update, context):
             )
             return
         
-        # Avvia 2 job asincroni: Processor (prepara dati) e Viewer (genera HTML)
+        # Avvia job viewer per generare HTML e link
         log_with_context(
             "info",
-            f"[VIEW] Avvio job asincroni: processor (prepara dati) e viewer (genera HTML), "
+            f"[VIEW] Avvio job viewer (genera HTML), "
             f"telegram_id={telegram_id}, business_name={user_db.business_name}, "
             f"correlation_id={correlation_id}",
             telegram_id=telegram_id,
@@ -328,8 +328,7 @@ async def view_cmd(update, context):
         import aiohttp
         
         # URL servizi (usa config se disponibile, altrimenti default)
-        from .config import PROCESSOR_URL as CONFIG_PROCESSOR_URL, VIEWER_URL as CONFIG_VIEWER_URL
-        PROCESSOR_URL = CONFIG_PROCESSOR_URL
+        from .config import VIEWER_URL as CONFIG_VIEWER_URL
         VIEWER_URL = CONFIG_VIEWER_URL
         
         # Assicura che VIEWER_URL abbia il protocollo
@@ -338,54 +337,13 @@ async def view_cmd(update, context):
         
         log_with_context(
             "info",
-            f"[VIEW] Configurazione URL servizi: PROCESSOR_URL={PROCESSOR_URL}, VIEWER_URL={VIEWER_URL}, "
+            f"[VIEW] Configurazione URL viewer: VIEWER_URL={VIEWER_URL}, "
             f"telegram_id={telegram_id}, correlation_id={correlation_id}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
         
-        # Job 1: Processor - prepara dati
-        async def job_processor():
-            try:
-                form = aiohttp.FormData()
-                form.add_field('telegram_id', str(telegram_id))
-                form.add_field('business_name', user_db.business_name)
-                form.add_field('correlation_id', correlation_id)
-                
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                    async with session.post(
-                        f"{PROCESSOR_URL}/api/viewer/prepare-data",
-                        data=form
-                    ) as response:
-                        if response.status == 200:
-                            log_with_context(
-                                "info",
-                                f"[VIEW_JOB1] Dati preparati con successo dal processor, "
-                                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
-                                telegram_id=telegram_id,
-                                correlation_id=correlation_id
-                            )
-                        else:
-                            error_text = await response.text()
-                            log_with_context(
-                                "error",
-                                f"[VIEW_JOB1] Errore preparazione dati: HTTP {response.status}, "
-                                f"telegram_id={telegram_id}, error={error_text[:200]}, "
-                                f"correlation_id={correlation_id}",
-                                telegram_id=telegram_id,
-                                correlation_id=correlation_id
-                            )
-            except Exception as e:
-                log_with_context(
-                    "error",
-                    f"[VIEW_JOB1] Errore job processor: {e}, telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id,
-                    exc_info=True
-                )
-        
-        # Job 2: Viewer - genera HTML e invia link al bot
+        # Job Viewer - genera HTML e invia link al bot
         async def job_viewer():
             try:
                 payload = {
@@ -394,7 +352,8 @@ async def view_cmd(update, context):
                     "correlation_id": correlation_id
                 }
                 
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                timeout = aiohttp.ClientTimeout(total=60)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(
                         f"{VIEWER_URL}/api/generate",
                         json=payload
@@ -403,7 +362,7 @@ async def view_cmd(update, context):
                             result = await response.json()
                             log_with_context(
                                 "info",
-                                f"[VIEW_JOB2] Viewer generato con successo: view_id={result.get('view_id')}, "
+                                f"[VIEW_JOB] Viewer generato con successo: view_id={result.get('view_id')}, "
                                 f"telegram_id={telegram_id}, correlation_id={correlation_id}",
                                 telegram_id=telegram_id,
                                 correlation_id=correlation_id
@@ -412,7 +371,7 @@ async def view_cmd(update, context):
                             error_text = await response.text()
                             log_with_context(
                                 "error",
-                                f"[VIEW_JOB2] Errore generazione viewer: HTTP {response.status}, "
+                                f"[VIEW_JOB] Errore generazione viewer: HTTP {response.status}, "
                                 f"telegram_id={telegram_id}, error={error_text[:200]}, "
                                 f"correlation_id={correlation_id}",
                                 telegram_id=telegram_id,
@@ -423,7 +382,7 @@ async def view_cmd(update, context):
                 error_details = traceback.format_exc()
                 log_with_context(
                     "error",
-                    f"[VIEW_JOB2] Errore job viewer: {e}, telegram_id={telegram_id}, "
+                    f"[VIEW_JOB] Errore job viewer: {e}, telegram_id={telegram_id}, "
                     f"correlation_id={correlation_id}, VIEWER_URL={VIEWER_URL}, "
                     f"error_details={error_details[:500]}",
                     telegram_id=telegram_id,
@@ -441,7 +400,7 @@ async def view_cmd(update, context):
         
         log_with_context(
             "info",
-            f"[VIEW] Creato Event per attendere link, telegram_id={telegram_id}, correlation_id={correlation_id}",
+            f"[VIEW] Creato Event per attendere link viewer, telegram_id={telegram_id}, correlation_id={correlation_id}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
@@ -454,13 +413,12 @@ async def view_cmd(update, context):
             parse_mode='Markdown'
         )
         
-        # Avvia job in parallelo
-        asyncio.create_task(job_processor())
+        # Avvia job viewer
         asyncio.create_task(job_viewer())
         
         log_with_context(
             "info",
-            f"[VIEW] Job avviati in parallelo, telegram_id={telegram_id}, correlation_id={correlation_id}",
+            f"[VIEW] Job viewer avviato, telegram_id={telegram_id}, correlation_id={correlation_id}",
             telegram_id=telegram_id,
             correlation_id=correlation_id
         )
