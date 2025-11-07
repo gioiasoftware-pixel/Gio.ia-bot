@@ -761,6 +761,7 @@ CAPACITÀ:
 - Analizzare movimenti e consumi
 - Generare report e statistiche
 - Conversazione naturale e coinvolgente
+- Generare link per visualizzare l'inventario
 
 ISTRUZIONI IMPORTANTI:
 - CONSULTA SEMPRE il database prima di rispondere a qualsiasi domanda informativa
@@ -772,6 +773,7 @@ ISTRUZIONI IMPORTANTI:
 - Suggerisci comandi del bot quando appropriato (es: /inventario, /log)
 - Se l'inventario ha scorte basse, avvisa proattivamente
 - Se l'utente fa domande generiche, usa il contesto per essere specifico
+- Se l'utente chiede di vedere tutti i vini o l'inventario completo, usa la funzione tool "generate_view_link" per inviare il link del viewer
 
 REGOLA CRITICA PER RICERCHE FILTRATE:
 - Se l'utente chiede vini con QUALSIASI filtro geografico/tipo/prezzo/annata (es. "della Toscana", "italiani", "rossi", "sotto €50"), DEVI chiamare search_wines con i filtri estratti
@@ -1146,6 +1148,9 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
             if name == "get_inventory_list":
                 limit = int(args.get("limit", 50))
                 return await _build_inventory_list_response(telegram_id, limit=limit)
+
+            if name == "generate_view_link":
+                return "Puoi usare il comando /view per ottenere il link al viewer dell'inventario."
 
             if name == "get_wine_info":
                 query = (args.get("wine_query") or "").strip()

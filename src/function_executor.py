@@ -23,6 +23,8 @@ class FunctionExecutor:
         try:
             if function_name == "search_wines":
                 return await self._execute_search_wines(parameters)
+            elif function_name == "generate_view_link":
+                return await self._execute_generate_view_link(parameters)
             elif function_name == "register_consumption":
                 return await self._execute_register_consumption(parameters)
             elif function_name == "register_replenishment":
@@ -324,6 +326,85 @@ class FunctionExecutor:
         return {
             "success": False,
             "error": "Funzione update_wine_field non ancora implementata nel processor"
+        }
+
+    async def _execute_generate_view_link(self, params: Dict) -> Dict:
+        """Genera link viewer (equivalente /view)"""
+        from .database_async import async_db_manager
+        from .config import VIEWER_URL as CONFIG_VIEWER_URL
+        import uuid
+        import aiohttp
+
+        user = await async_db_manager.get_user_by_telegram_id(self.telegram_id)
+        if not user or not user.business_name:
+            return {
+                "success": False,
+                "error": "Nome locale non configurato. Completa l'onboarding con /start"
+            }
+
+        wines = await async_db_manager.get_user_wines(self.telegram_id)
+        if not wines:
+            return {
+                "success": False,
+                "error": "Inventario vuoto. Carica prima i vini con /upload"
+            }
+
+        viewer_base_url = CONFIG_VIEWER_URL
+        if not viewer_base_url:
+            return {
+                "success": False,
+                "error": "Viewer non configurato (VIEWER_URL mancante)"
+            }
+        if not viewer_base_url.startswith(("http://", "https://")):
+            viewer_base_url = f"https://{viewer_base_url}"
+
+        correlation_id = params.get("correlation_id") or str(uuid.uuid4())
+        payload = {
+            "telegram_id": self.telegram_id,
+            "business_name": user.business_name,
+            "correlation_id": correlation_id
+        }
+
+        viewer_url = None
+        try:
+            request_url = f"{viewer_base_url}/api/generate"
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(request_url, json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        viewer_url = data.get("viewer_url")
+                        if not viewer_url:
+                            return {
+                                "success": False,
+                                "error": "Il viewer non ha restituito il link"
+                            }
+                    else:
+                        error_text = await response.text()
+                        return {
+                            "success": False,
+                            "error": f"Viewer non disponibile (HTTP {response.status}): {error_text[:200]}"
+                        }
+        except Exception as e:
+            logger.error(f"[FUNCTION_EXECUTOR] Errore chiamata viewer: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Errore contattando il viewer: {str(e)}"
+            }
+
+        message = (
+            "🌐 **Link Visualizzazione Inventario**\n\n"
+            "📋 Clicca sul link qui sotto per aprire l'inventario completo:\n\n"
+            f"[🔗 Apri Viewer]({viewer_url})\n\n"
+            "⏰ **Validità:** 1 ora\n"
+            "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
+            f"📊 **Vini nel tuo inventario:** {len(wines)}"
+        )
+
+        return {
+            "success": True,
+            "formatted_message": message,
+            "viewer_url": viewer_url
         }
     
     def _normalize_filters(self, filters: Dict[str, Any]) -> Dict[str, Any]:

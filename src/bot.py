@@ -438,15 +438,15 @@ async def view_cmd(update, context):
             if viewer_url:
                 # Modifica il messaggio con il link
                 final_message = (
-                    "<b>🌐 Link Visualizzazione Inventario</b>\n\n"
+                    "🌐 **Link Visualizzazione Inventario**\n\n"
                     "📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-                    f'<a href="{viewer_url}">🔗 Apri Viewer</a>\n\n'
-                    "⏰ <b>Validità:</b> 1 ora\n"
+                    f"[🔗 Apri Viewer]({viewer_url})\n\n"
+                    "⏰ **Validità:** 1 ora\n"
                     "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
-                    f"📊 <b>Vini nel tuo inventario:</b> {len(user_wines)}"
+                    f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
                 )
                 
-                await loading_message.edit_text(final_message, parse_mode=ParseMode.HTML)
+                await loading_message.edit_text(final_message, parse_mode=ParseMode.MARKDOWN)
                 
                 log_with_context(
                     "info",
@@ -758,9 +758,10 @@ async def chat_handler(update, context):
                 result = await handler.execute_intent(intent)
                 
                 if result.get("success"):
+                    parse_mode = result.get("parse_mode", 'Markdown')
                     await update.message.reply_text(
                         result.get("formatted_message", "✅ Operazione completata"),
-                        parse_mode='Markdown'
+                        parse_mode=parse_mode
                     )
                     return  # ✅ Successo, termina qui
                 else:
@@ -791,9 +792,10 @@ async def chat_handler(update, context):
                 result = await handler.execute_intent(intent)
                 
                 if result.get("success"):
+                    parse_mode = result.get("parse_mode", 'Markdown')
                     await update.message.reply_text(
                         result.get("formatted_message", "✅ Operazione completata"),
-                        parse_mode='Markdown'
+                        parse_mode=parse_mode
                     )
                     return  # ✅ Successo, termina qui
                 else:

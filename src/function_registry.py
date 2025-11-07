@@ -31,6 +31,15 @@ class FunctionRegistry:
                 }
             },
             {
+                "name": "generate_view_link",
+                "description": "Genera il link del viewer web (comando /view) per consultare tutto l'inventario.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
                 "name": "register_consumption",
                 "description": "Registra un consumo (vendita/consumo) di bottiglie. Diminuisce la quantità disponibile del vino specificato.",
                 "parameters": {

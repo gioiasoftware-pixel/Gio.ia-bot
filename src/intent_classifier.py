@@ -246,7 +246,22 @@ class IntentClassifier:
     
     async def _classify_by_keywords(self, message: str) -> Intent:
         """Classifica usando keyword matching"""
-        
+ 
+        viewer_patterns = [
+            r'\b(vedi|visualizza|mostra|apri)\b.*\b(inventario|tutti i vini|tutto)\b',
+            r'\blink\s+(?:dell\'inventario|inventario|tutti i vini)',
+            r'\b(elenco completo|lista completa)\b',
+            r'^/view$'
+        ]
+        for pattern in viewer_patterns:
+            if re.search(pattern, message, re.IGNORECASE):
+                return Intent(
+                    type="viewer_link",
+                    confidence=0.95,
+                    parameters={},
+                    handler="generate_view_link"
+                )
+
         # Tipi di vino comuni (per riconoscere quando usare filtri)
         wine_types = {
             'spumante': 'spumante', 'spumanti': 'spumante',
