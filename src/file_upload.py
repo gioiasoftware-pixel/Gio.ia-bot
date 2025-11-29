@@ -295,14 +295,20 @@ class FileUploadManager:
             # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
             # Estrai dati dal campo 'result' annidato se presente
             result_status = result.get('status')
+            saved_wines = 0
+            total_wines = 0
+            warning_count = 0
+            error_count = 0
+            
             if result_status == 'completed':
-                result_data = result.get('result', result)
+                result_data = result.get('result', {})
                 if result_data.get('status') == 'success':
-                    # Job completato con successo
+                    # Job completato con successo - estrai dati da result_data
                     saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
                     total_wines = result_data.get('total_wines', 0)
                     warning_count = result_data.get('warning_count', 0)
                     error_count = result_data.get('error_count', 0)
+                    logger.info(f"✅ Job {job_id} completato con successo: {saved_wines} vini salvati, {error_count} errori")
                 else:
                     # Job completato ma con errore nel result
                     error_msg = result_data.get('error', 'Errore sconosciuto')
@@ -316,11 +322,12 @@ class FileUploadManager:
                     )
                     return True
             elif result_status == 'success':
-                # Compatibilità con formato vecchio
+                # Compatibilità con formato vecchio - dati direttamente in result
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
                 total_wines = result.get('total_wines', 0)
                 warning_count = result.get('warning_count', 0)
                 error_count = result.get('error_count', 0)
+                logger.info(f"✅ Job {job_id} completato con successo (formato vecchio): {saved_wines} vini salvati")
             else:
                 # Status diverso da completed o success
                 error_msg = result.get('error', 'Errore sconosciuto')
@@ -339,10 +346,6 @@ class FileUploadManager:
             
             # Se arriviamo qui, il job è completato con successo
             if result_status == 'completed' or result_status == 'success':
-                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
-                total_wines = result.get('total_wines', 0)
-                warning_count = result.get('warning_count', 0)  # Separato: solo warnings
-                error_count = result.get('error_count', 0)      # Solo errori critici
                 
                 # Messaggio base
                 if error_count > 0:
