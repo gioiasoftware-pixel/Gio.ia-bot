@@ -345,7 +345,8 @@ class FileUploadManager:
                 return True
             
             # Se arriviamo qui, il job è completato con successo
-            if result_status == 'completed' or result_status == 'success':
+            # I valori saved_wines, total_wines, etc. sono già stati estratti sopra
+            if saved_wines > 0 or total_wines > 0:
                 
                 # Messaggio base
                 if error_count > 0:
