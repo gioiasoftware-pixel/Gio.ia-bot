@@ -292,7 +292,53 @@ class FileUploadManager:
             except:
                 pass
             
-            if result.get('status') == 'success':
+            # Il processor restituisce: {status: 'completed', result: {status: 'success', ...}}
+            # Estrai dati dal campo 'result' annidato se presente
+            result_status = result.get('status')
+            if result_status == 'completed':
+                result_data = result.get('result', result)
+                if result_data.get('status') == 'success':
+                    # Job completato con successo
+                    saved_wines = result_data.get('saved_wines', result_data.get('total_wines', 0))
+                    total_wines = result_data.get('total_wines', 0)
+                    warning_count = result_data.get('warning_count', 0)
+                    error_count = result_data.get('error_count', 0)
+                else:
+                    # Job completato ma con errore nel result
+                    error_msg = result_data.get('error', 'Errore sconosciuto')
+                    logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
+                    await update.message.reply_text(
+                        f"⚠️ **Errore elaborazione inventario**\n\n"
+                        f"Dettagli: {error_msg[:200]}\n\n"
+                        f"📋 **Job ID:** `{job_id}`\n\n"
+                        f"Riprova più tardi o contatta il supporto.",
+                        parse_mode='Markdown'
+                    )
+                    return True
+            elif result_status == 'success':
+                # Compatibilità con formato vecchio
+                saved_wines = result.get('saved_wines', result.get('total_wines', 0))
+                total_wines = result.get('total_wines', 0)
+                warning_count = result.get('warning_count', 0)
+                error_count = result.get('error_count', 0)
+            else:
+                # Status diverso da completed o success
+                error_msg = result.get('error', 'Errore sconosciuto')
+                if not error_msg or error_msg == '...':
+                    error_msg = f'Status job: {result_status}'
+                
+                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
+                await update.message.reply_text(
+                    f"⚠️ **Errore elaborazione inventario**\n\n"
+                    f"Dettagli: {error_msg[:200]}\n\n"
+                    f"📋 **Job ID:** `{job_id}`\n\n"
+                    f"Riprova più tardi o contatta il supporto.",
+                    parse_mode='Markdown'
+                )
+                return True
+            
+            # Se arriviamo qui, il job è completato con successo
+            if result_status == 'completed' or result_status == 'success':
                 saved_wines = result.get('saved_wines', result.get('total_wines', 0))
                 total_wines = result.get('total_wines', 0)
                 warning_count = result.get('warning_count', 0)  # Separato: solo warnings
@@ -345,23 +391,6 @@ class FileUploadManager:
                         onboarding_completed=True
                     )
                     logger.info(f"Onboarding completato automaticamente dopo upload inventario per {telegram_id}/{business_name}")
-            else:
-                error_msg = result.get('error', 'Errore sconosciuto')
-                if not error_msg or error_msg == '...':
-                    error_msg = 'Errore durante il polling dello stato del job. Verifica i log del processor.'
-                
-                logger.error(f"Job completion error for {job_id}: {error_msg}, full result: {result}")
-                await update.message.reply_text(
-                    f"⚠️ **Errore elaborazione inventario**\n\n"
-                    f"Dettagli: {error_msg[:200]}\n\n"
-                    f"💡 **Possibili cause:**\n"
-                    f"• Processor non raggiungibile\n"
-                    f"• Timeout durante l'elaborazione\n"
-                    f"• Problema di connessione\n\n"
-                    f"📋 **Job ID:** `{job_id}`\n\n"
-                    f"Riprova più tardi o contatta il supporto.",
-                    parse_mode='Markdown'
-                )
             
             return True
             
