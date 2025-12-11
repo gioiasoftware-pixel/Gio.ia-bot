@@ -660,19 +660,26 @@ INVENTARIO ATTUALE:
                     # Se è stata rilevata una ricerca, cerca nel database - ASYNC
                     # Ma solo se NON è una conversazione generale
                     if wine_search_term and not _is_general_conversation(prompt):
-                        found_wines = await async_db_manager.search_wines(telegram_id, wine_search_term, limit=10)
+                        found_wines = await async_db_manager.search_wines(telegram_id, wine_search_term, limit=50)
                         if found_wines:
-                            # Se ci sono più corrispondenze, restituisci marker per selezione con pulsanti
-                            if len(found_wines) > 1:
-                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', richiesta selezione")
-                                # Marker che verrà processato in bot.py per mostrare pulsanti
-                                return f"[[WINE_SELECTION:{wine_search_term}]]"
-                            
                             # Prova a generare risposta pre-formattata (bypass AI per domande specifiche)
                             formatted_response = _format_wine_response_directly(prompt, telegram_id, found_wines)
                             if formatted_response:
                                 logger.info(f"[FORMATTED] Risposta pre-formattata generata per domanda specifica")
                                 return formatted_response
+                            
+                            # Se ci sono più corrispondenze, mostra lista completa invece del marker
+                            if len(found_wines) > 1:
+                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', mostro lista completa")
+                                # Restituisci lista formattata direttamente
+                                from .response_templates import format_inventory_list
+                                return format_inventory_list(found_wines, limit=50)
+                            
+                            # Se c'è solo un vino, usa format_wine_info
+                            if len(found_wines) == 1:
+                                logger.info(f"[WINE_SELECTION] Trovato 1 vino per '{wine_search_term}', mostro info dettagliata")
+                                from .response_templates import format_wine_info
+                                return format_wine_info(found_wines[0])
                             
                             # Se non è una domanda specifica, passa info all'AI nel contesto
                             specific_wine_info = "\n\nVINI TROVATI NEL DATABASE PER LA RICERCA:\n"
