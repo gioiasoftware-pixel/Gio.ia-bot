@@ -18,7 +18,17 @@ PORT = int(os.getenv("PORT", 8000))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Processor Microservice
-PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
+def _normalize_url(url: str) -> str:
+    """Normalizza URL aggiungendo https:// se manca il protocollo"""
+    if not url:
+        return "https://gioia-processor-production.up.railway.app"
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url
+
+PROCESSOR_URL_RAW = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
+PROCESSOR_URL = _normalize_url(PROCESSOR_URL_RAW)
 
 # Viewer Microservice
 VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")

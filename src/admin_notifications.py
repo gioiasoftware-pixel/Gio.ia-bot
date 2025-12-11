@@ -9,7 +9,17 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 # URL del processor per notifiche admin (opzionale)
-PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
+def _normalize_url(url: str) -> str:
+    """Normalizza URL aggiungendo https:// se manca il protocollo"""
+    if not url:
+        return "https://gioia-processor-production.up.railway.app"
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url
+
+PROCESSOR_URL_RAW = os.getenv("PROCESSOR_URL", "https://gioia-processor-production.up.railway.app")
+PROCESSOR_URL = _normalize_url(PROCESSOR_URL_RAW)
 ADMIN_NOTIFICATIONS_ENABLED = os.getenv("ADMIN_NOTIFICATIONS_ENABLED", "false").lower() == "true"
 
 
