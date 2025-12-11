@@ -711,8 +711,8 @@ async def callback_handler(update, context):
             quantity = int(parts[2])
             
             # Gestisci movimento tramite inventory_movement_manager
-            handled = await inventory_movement_manager._handle_movement_callback(
-                update, context, wine_id, quantity, movement_type
+            handled = await inventory_movement_manager.process_movement_from_callback(
+                update, context, wine_id, movement_type, quantity
             )
             if handled:
                 return
