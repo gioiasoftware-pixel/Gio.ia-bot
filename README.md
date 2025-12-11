@@ -344,4 +344,5 @@ MIT License - Vedi [LICENSE](LICENSE) per dettagli.
 
 ---
 
-**Gio.ia Bot** - Trasforma la gestione del tuo inventario vini con l'AI! 🍷🤖
+**Gio.ia Bot** - Trasforma la gestione del tuo inventario vini con l'AI! 🍷🤖 
+ 
