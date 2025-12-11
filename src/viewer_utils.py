@@ -100,11 +100,17 @@ def get_viewer_url(token: str, correlation_id: Optional[str] = None) -> str:
     Returns:
         URL completo del viewer
     """
-    viewer_url = os.getenv("VIEWER_URL", "https://vineinventory-viewer.railway.app")
+    def _normalize_url(url: str) -> str:
+        """Normalizza URL aggiungendo https:// se manca il protocollo"""
+        if not url:
+            return "https://vineinventory-viewer-production.up.railway.app"
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        return url
     
-    if not viewer_url:
-        logger.warning(f"[VIEWER_URL] VIEWER_URL non configurata, uso default")
-        viewer_url = "https://vineinventory-viewer.railway.app"
+    viewer_url_raw = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
+    viewer_url = _normalize_url(viewer_url_raw)
     
     full_url = f"{viewer_url}?token={token}"
     
