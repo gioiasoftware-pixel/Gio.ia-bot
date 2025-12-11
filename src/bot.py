@@ -316,7 +316,48 @@ async def chat_handler(update, context):
                 logger.error(f"Errore invio bottoni periodo: {e}")
                 # fallback: continua
         
-        # Gestione WINE_SELECTION marker - mostra risultati ricerca vini
+        # Gestione WINE_SELECTION_BUTTONS marker - mostra bottoni per selezione vino
+        if reply and '[[WINE_SELECTION_BUTTONS:' in reply:
+            try:
+                marker_start = reply.find('[[WINE_SELECTION_BUTTONS:')
+                marker_end = reply.find(']]', marker_start)
+                if marker_start >= 0 and marker_end >= 0:
+                    wine_ids_str = reply[marker_start + 27:marker_end]  # 27 = len('[[WINE_SELECTION_BUTTONS:')
+                    wine_ids = [int(wid) for wid in wine_ids_str.split(':') if wid.isdigit()]
+                    
+                    logger.info(f"[BOT] Processing WINE_SELECTION_BUTTONS marker with {len(wine_ids)} wine IDs")
+                    
+                    # Recupera vini dal database
+                    from .database_async import async_db_manager
+                    user_wines = await async_db_manager.get_user_wines(telegram_id)
+                    
+                    # Filtra solo i vini richiesti
+                    selected_wines = [w for w in user_wines if w.id in wine_ids]
+                    
+                    if selected_wines:
+                        message = f"🔍 **Ho trovato {len(selected_wines)} vini che corrispondono alla tua ricerca**\n\n"
+                        message += "Seleziona quale vuoi vedere:\n\n"
+                        
+                        # Crea bottoni inline
+                        keyboard = []
+                        for wine in selected_wines[:10]:  # Max 10 bottoni
+                            wine_display = wine.name
+                            if wine.producer:
+                                wine_display += f" ({wine.producer})"
+                            if wine.vintage:
+                                wine_display += f" {wine.vintage}"
+                            
+                            # Callback data: wine_info:{wine_id}
+                            callback_data = f"wine_info:{wine.id}"
+                            keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                        
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+                        return
+            except Exception as e:
+                logger.error(f"Errore gestione WINE_SELECTION_BUTTONS marker: {e}", exc_info=True)
+        
+        # Gestione WINE_SELECTION marker - mostra risultati ricerca vini (legacy)
         if reply and '[[WINE_SELECTION:' in reply:
             try:
                 # Estrai termine di ricerca dal marker
@@ -840,6 +881,33 @@ async def callback_handler(update, context):
         except Exception:
             pass
 
+    # Gestisci callback info vino (wine_info:{wine_id})
+    if query.data and query.data.startswith("wine_info:"):
+        try:
+            wine_id = int(query.data.split(":")[1])
+            telegram_id = update.effective_user.id
+            
+            from .database_async import async_db_manager
+            from .response_templates import format_wine_info
+            
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            selected_wine = None
+            for wine in user_wines:
+                if wine.id == wine_id:
+                    selected_wine = wine
+                    break
+            
+            if selected_wine:
+                wine_info = format_wine_info(selected_wine)
+                await query.edit_message_text(wine_info, parse_mode='Markdown')
+            else:
+                await query.answer("❌ Vino non trovato.", show_alert=True)
+            return
+        except Exception as e:
+            logger.error(f"Errore gestione callback wine_info: {e}", exc_info=True)
+            await query.answer("❌ Errore durante il caricamento.", show_alert=True)
+            return
+    
     # Gestisci callback inventario - ASYNC
     if await inventory_manager.handle_wine_callback(update, context):
         return

@@ -668,12 +668,12 @@ INVENTARIO ATTUALE:
                                 logger.info(f"[FORMATTED] Risposta pre-formattata generata per domanda specifica")
                                 return formatted_response
                             
-                            # Se ci sono più corrispondenze, mostra lista completa invece del marker
+                            # Se ci sono più corrispondenze, mostra bottoni per selezione
                             if len(found_wines) > 1:
-                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', mostro lista completa")
-                                # Restituisci lista formattata direttamente
-                                from .response_templates import format_inventory_list
-                                return format_inventory_list(found_wines, limit=50)
+                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', mostro bottoni per selezione")
+                                # Restituisci marker per mostrare bottoni inline
+                                wine_ids = [str(w.id) for w in found_wines[:10]]  # Max 10 bottoni
+                                return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
                             
                             # Se c'è solo un vino, usa format_wine_info
                             if len(found_wines) == 1:
