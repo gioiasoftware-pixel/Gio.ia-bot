@@ -645,7 +645,7 @@ class NewOnboardingManager:
                 f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
                 f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
                 f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
-                f"• Consultare inventario: `/inventario`\n\n"
+                f"• Consultare inventario: `/view`\n\n"
                 f"📋 Usa `/help` per tutti i comandi disponibili!"
             )
             

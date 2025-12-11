@@ -208,7 +208,7 @@ def format_wine_not_found(wine_search_term: str) -> str:
         f"Non ho trovato '{wine_search_term}' nel tuo inventario.\n\n"
         f"💡 **Cosa puoi fare:**\n"
         f"• Controlla l'ortografia del nome\n"
-        f"• Usa `/inventario` per vedere tutti i vini\n"
+        f"• Usa `/view` per vedere tutti i vini\n"
         f"• Usa `/aggiungi` per aggiungere un nuovo vino\n"
         f"{'━' * 30}"
     )

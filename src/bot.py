@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 from aiohttp import web
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from .ai import get_ai_response
@@ -10,22 +9,13 @@ from .inventory import inventory_manager
 from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from .logging_config import setup_colored_logging
 
-# Configurazione logging colorato
-setup_colored_logging("telegram-bot")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Dict globale per tracciare richieste viewer in attesa
-# Mappa: telegram_id -> {'event': Event, 'viewer_url': str, 'correlation_id': str}
-_viewer_pending_requests = {}
-_viewer_pending_lock = asyncio.Lock()
-
-# Dict globale per tracciare job in corso per utente
-# Mappa: telegram_id -> {'job_id': str, 'status': str, 'file_name': str, 'started_at': datetime, 'chat_id': int}
-_pending_jobs = {}
-_pending_jobs_lock = asyncio.Lock()
+# Filtra i log httpx/httpcore: mostra solo ERROR
+for _lib in ("httpx", "httpcore"):
+    logging.getLogger(_lib).addFilter(lambda r: r.levelno >= logging.ERROR)
 
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
@@ -43,127 +33,42 @@ if not TELEGRAM_BOT_TOKEN:
 
 
 async def start_cmd(update, context):
-    """Gestisce il comando /start con gestione errori completa."""
     user = update.effective_user
     username = user.username or user.first_name or "Utente"
     telegram_id = user.id
     
     logger.info(f"Comando /start da: {username} (ID: {telegram_id})")
     
-    # Verifica se c'è un job in corso per questo utente
-    async with _pending_jobs_lock:
-        if telegram_id in _pending_jobs:
-            job_info = _pending_jobs[telegram_id]
-            await update.message.reply_text(
-                "🔄 **Stiamo lavorando sul tuo inventario!**\n\n"
-                f"📄 **File**: {job_info.get('file_name', 'Sconosciuto')}\n"
-                f"⏱️ **Elaborazione in corso...**\n\n"
-                f"Ti manderò un messaggio appena pronto! ✅\n\n"
-                f"📋 Job ID: `{job_info.get('job_id', 'N/A')}`",
-                parse_mode='Markdown'
-            )
-            return
-    
-    try:
-        # Verifica disponibilità database
-        if not DATABASE_AVAILABLE:
-            await update.message.reply_text(
-                "⚠️ **Database non disponibile**\n\n"
-                "Il sistema è temporaneamente in manutenzione.\n"
-                "Riprova tra qualche minuto."
-            )
-            return
-        
-        # Verifica se l'onboarding è completato - ASYNC (con error handling)
-        try:
-            is_complete = await new_onboarding_manager.is_onboarding_complete(telegram_id)
-        except Exception as onboarding_check_error:
-            logger.error(
-                f"Errore verifica onboarding per {telegram_id}: {onboarding_check_error}",
-                exc_info=True
-            )
-            # Assumiamo che l'onboarding non sia completato e procediamo
-            is_complete = False
-        
-        if not is_complete:
-            # Avvia nuovo onboarding (con error handling)
-            try:
-                await new_onboarding_manager.start_new_onboarding(update, context)
-            except Exception as onboarding_error:
-                logger.error(
-                    f"Errore avvio onboarding per {telegram_id}: {onboarding_error}",
-                    exc_info=True
-                )
-                await update.message.reply_text(
-                    "⚠️ **Errore durante l'onboarding**\n\n"
-                    "Si è verificato un errore. Riprova tra qualche istante.\n"
-                    "Se il problema persiste, contatta il supporto."
-                )
-        else:
-            # Onboarding già completato - ASYNC (con error handling)
-            try:
-                from .database_async import async_db_manager
-                user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
-                
-                # BUG #3 FIX: Verifica che user_data non sia None
-                if user_data is None:
-                    logger.warning(f"User {telegram_id} non trovato nel database, avvio onboarding")
-                    # Se user non esiste, avvia onboarding
-                    try:
-                        await new_onboarding_manager.start_new_onboarding(update, context)
-                    except Exception as onboarding_error:
-                        logger.error(
-                            f"Errore avvio onboarding per {telegram_id}: {onboarding_error}",
-                            exc_info=True
-                        )
-                        await update.message.reply_text(
-                            "⚠️ **Errore durante l'onboarding**\n\n"
-                            "Si è verificato un errore. Riprova tra qualche istante."
-                        )
-                    return
-                
-                # BUG #3 FIX: Verifica che business_name esista
-                business_name = user_data.business_name if hasattr(user_data, 'business_name') and user_data.business_name else "Il tuo locale"
-                
-                welcome_text = (
-                    f"Bentornato {username}! 👋\n\n"
-                    f"🏢 **{business_name}**\n\n"
-                    "🤖 **Gio.ia-bot** è pronto ad aiutarti con:\n"
-                    "• 📦 Gestione inventario vini\n"
-                    "• 📊 Report e statistiche\n"
-                    "• 💡 Consigli personalizzati\n\n"
-                    "💬 **Comunica i movimenti:**\n"
-                    "• 'Ho venduto 2 bottiglie di Chianti'\n"
-                    "• 'Ho ricevuto 10 bottiglie di Barolo'\n\n"
-                    "📋 Usa /help per tutti i comandi!"
-                )
-                await update.message.reply_text(welcome_text, parse_mode='Markdown')
-                
-            except Exception as db_error:
-                logger.error(
-                    f"Errore database durante /start per {telegram_id}: {db_error}",
-                    exc_info=True
-                )
-                await update.message.reply_text(
-                    "⚠️ **Errore di connessione**\n\n"
-                    "Si è verificato un errore di connessione al database.\n"
-                    "Riprova tra qualche minuto."
-                )
-                
-    except Exception as e:
-        # BUG #2 FIX: Cattura tutte le eccezioni non previste
-        logger.error(
-            f"Errore critico in start_cmd per {telegram_id}: {e}",
-            exc_info=True
+    # Verifica disponibilità database
+    if not DATABASE_AVAILABLE:
+        await update.message.reply_text(
+            "⚠️ **Database non disponibile**\n\n"
+            "Il sistema è temporaneamente in manutenzione.\n"
+            "Riprova tra qualche minuto."
         )
-        try:
-            await update.message.reply_text(
-                "⚠️ **Errore**\n\n"
-                "Si è verificato un errore imprevisto.\n"
-                "Riprova tra qualche istante o contatta il supporto."
-            )
-        except Exception as reply_error:
-            logger.error(f"Errore anche nell'invio messaggio errore: {reply_error}")
+        return
+    
+    # Verifica se l'onboarding è completato - ASYNC
+    if not await new_onboarding_manager.is_onboarding_complete(telegram_id):
+        # Avvia nuovo onboarding
+        await new_onboarding_manager.start_new_onboarding(update, context)
+    else:
+        # Onboarding già completato - ASYNC
+        from .database_async import async_db_manager
+        user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        welcome_text = (
+            f"Bentornato {username}! 👋\n\n"
+            f"🏢 **{user_data.business_name}**\n\n"
+            "🤖 **Gio.ia-bot** è pronto ad aiutarti con:\n"
+            "• 📦 Gestione inventario vini\n"
+            "• 📊 Report e statistiche\n"
+            "• 💡 Consigli personalizzati\n\n"
+            "💬 **Comunica i movimenti:**\n"
+            "• 'Ho venduto 2 bottiglie di Chianti'\n"
+            "• 'Ho ricevuto 10 bottiglie di Barolo'\n\n"
+            "📋 Usa /help per tutti i comandi!"
+        )
+        await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 
 async def testai_cmd(update, context):
@@ -217,367 +122,13 @@ async def deletewebhook_cmd(update, context):
         await update.message.reply_text(f"❌ Errore rimozione webhook: {e}")
 
 
-async def view_cmd(update, context):
-    """Comando per generare link viewer con token JWT"""
-    from .structured_logging import log_with_context, set_request_context, get_correlation_id
-    import uuid
-    
-    user = update.effective_user
-    telegram_id = user.id
-    username = user.username or user.first_name or "Utente"
-    
-    # Setup correlation_id per logging strutturato
-    correlation_id = str(uuid.uuid4())
-    set_request_context(telegram_id, correlation_id)
-    
-    log_with_context(
-        "info",
-        f"[VIEW] Comando /view ricevuto da {username} (ID: {telegram_id})",
-        telegram_id=telegram_id,
-        correlation_id=correlation_id
-    )
-    
-    try:
-        from .database_async import async_db_manager
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Verifica utente e inventario per telegram_id={telegram_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Verifica che utente esista e abbia onboarding completato
-        user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)
-        
-        if not user_db:
-            log_with_context(
-                "warning",
-                f"[VIEW] Utente non trovato per telegram_id={telegram_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-            await update.message.reply_text(
-                "⚠️ **Utente non trovato**\n\n"
-                "Completa prima l'onboarding con `/start`."
-            )
-            return
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Utente trovato: business_name={user_db.business_name}, "
-            f"onboarding_completed={user_db.onboarding_completed}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        if not user_db.business_name or user_db.business_name == "Upload Manuale":
-            log_with_context(
-                "warning",
-                f"[VIEW] Business name non configurato per telegram_id={telegram_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-            await update.message.reply_text(
-                "⚠️ **Nome locale non configurato**\n\n"
-                "Completa prima l'onboarding con `/start`."
-            )
-            return
-        
-        # Verifica che abbia inventario
-        log_with_context(
-            "info",
-            f"[VIEW] Recupero inventario per telegram_id={telegram_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        user_wines = await async_db_manager.get_user_wines(telegram_id)
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Recuperati {len(user_wines) if user_wines else 0} vini da tabella dinamica per "
-            f"{telegram_id}/{user_db.business_name}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        if not user_wines or len(user_wines) == 0:
-            log_with_context(
-                "warning",
-                f"[VIEW] Inventario vuoto per telegram_id={telegram_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-            await update.message.reply_text(
-                "⚠️ **Inventario vuoto**\n\n"
-                "Carica prima il tuo inventario con `/upload`."
-            )
-            return
-        
-        # Avvia job viewer per generare HTML e link
-        log_with_context(
-            "info",
-            f"[VIEW] Avvio job viewer (genera HTML), "
-            f"telegram_id={telegram_id}, business_name={user_db.business_name}, "
-            f"correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        import asyncio
-        import aiohttp
-        
-        # URL servizi (usa config se disponibile, altrimenti default)
-        from .config import VIEWER_URL as CONFIG_VIEWER_URL
-        VIEWER_URL = CONFIG_VIEWER_URL
-        
-        # Assicura che VIEWER_URL abbia il protocollo
-        if VIEWER_URL and not VIEWER_URL.startswith(("http://", "https://")):
-            VIEWER_URL = f"https://{VIEWER_URL}"
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Configurazione URL viewer: VIEWER_URL={VIEWER_URL}, "
-            f"telegram_id={telegram_id}, correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Job Viewer - genera HTML e invia link al bot
-        async def job_viewer():
-            try:
-                payload = {
-                    "telegram_id": telegram_id,
-                    "business_name": user_db.business_name,
-                    "correlation_id": correlation_id
-                }
-                
-                timeout = aiohttp.ClientTimeout(total=60)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(
-                        f"{VIEWER_URL}/api/generate",
-                        json=payload
-                    ) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            log_with_context(
-                                "info",
-                                f"[VIEW_JOB] Viewer generato con successo: view_id={result.get('view_id')}, "
-                                f"telegram_id={telegram_id}, correlation_id={correlation_id}",
-                                telegram_id=telegram_id,
-                                correlation_id=correlation_id
-                            )
-                        else:
-                            error_text = await response.text()
-                            log_with_context(
-                                "error",
-                                f"[VIEW_JOB] Errore generazione viewer: HTTP {response.status}, "
-                                f"telegram_id={telegram_id}, error={error_text[:200]}, "
-                                f"correlation_id={correlation_id}",
-                                telegram_id=telegram_id,
-                                correlation_id=correlation_id
-                            )
-            except Exception as e:
-                import traceback
-                error_details = traceback.format_exc()
-                log_with_context(
-                    "error",
-                    f"[VIEW_JOB] Errore job viewer: {e}, telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}, VIEWER_URL={VIEWER_URL}, "
-                    f"error_details={error_details[:500]}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id,
-                    exc_info=True
-                )
-        
-        # Crea Event per attendere il link dal viewer
-        viewer_event = asyncio.Event()
-        _viewer_pending_requests[telegram_id] = {
-            'event': viewer_event,
-            'viewer_url': None,
-            'correlation_id': correlation_id
-        }
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Creato Event per attendere link viewer, telegram_id={telegram_id}, correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Messaggio all'utente: link in preparazione
-        loading_message = await update.message.reply_text(
-            f"⏳ **Generazione link in corso...**\n\n"
-            f"📋 Sto preparando il tuo inventario per la visualizzazione.\n\n"
-            f"⏱️ Attendo il link...",
-            parse_mode='Markdown'
-        )
-        
-        # Avvia job viewer
-        asyncio.create_task(job_viewer())
-        
-        log_with_context(
-            "info",
-            f"[VIEW] Job viewer avviato, telegram_id={telegram_id}, correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Attendi il link dal viewer (timeout 60 secondi)
-        try:
-            await asyncio.wait_for(viewer_event.wait(), timeout=60.0)
-            
-            # Recupera il link dal dict
-            async with _viewer_pending_lock:
-                pending_data = _viewer_pending_requests.get(telegram_id)
-                viewer_url = pending_data.get('viewer_url') if pending_data else None
-                # Rimuovi dalla cache
-                _viewer_pending_requests.pop(telegram_id, None)
-            
-            if viewer_url:
-                # Modifica il messaggio con il link
-                final_message = (
-                    "🌐 **Link Visualizzazione Inventario**\n\n"
-                    "📋 Clicca sul link qui sotto per visualizzare il tuo inventario completo:\n\n"
-                    f"[🔗 Apri Viewer]({viewer_url})\n\n"
-                    "⏰ **Validità:** 1 ora\n"
-                    "💡 Se il link scade, usa /view per generarne uno nuovo.\n\n"
-                    f"📊 **Vini nel tuo inventario:** {len(user_wines)}"
-                )
-                
-                await loading_message.edit_text(final_message, parse_mode=ParseMode.MARKDOWN)
-                
-                log_with_context(
-                    "info",
-                    f"[VIEW] Link inviato all'utente con successo, telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id
-                )
-            else:
-                # Timeout o errore
-                await loading_message.edit_text(
-                    "❌ **Timeout generazione link**\n\n"
-                    "Il link non è stato generato entro il tempo previsto.\n"
-                    "Riprova con `/view`.",
-                    parse_mode='Markdown'
-                )
-                
-                log_with_context(
-                    "warning",
-                    f"[VIEW] Timeout attesa link (nessun URL), telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id
-                )
-                
-        except asyncio.TimeoutError:
-            # Timeout
-            async with _viewer_pending_lock:
-                _viewer_pending_requests.pop(telegram_id, None)
-            
-            await loading_message.edit_text(
-                "❌ **Timeout generazione link**\n\n"
-                "Il link non è stato generato entro 60 secondi.\n"
-                "Riprova con `/view`.",
-                parse_mode='Markdown'
-            )
-            
-            log_with_context(
-                "warning",
-                f"[VIEW] Timeout attesa link (60s), telegram_id={telegram_id}, correlation_id={correlation_id}",
-                telegram_id=telegram_id,
-                correlation_id=correlation_id
-            )
-        
-    except Exception as e:
-        log_with_context(
-            "error",
-            f"[VIEW] Errore comando /view: {e}, correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id,
-            exc_info=True
-        )
-        await update.message.reply_text(
-            "❌ **Errore generazione link**\n\n"
-            "Riprova più tardi."
-        )
-        
-        # Pulisci cache in caso di errore
-        async with _viewer_pending_lock:
-            _viewer_pending_requests.pop(telegram_id, None)
-
-
-def _is_comprehension_error(error_msg: str) -> bool:
-    """
-    Identifica se un errore è un errore di comprensione (AI può risolvere)
-    oppure un errore tecnico (AI non può risolvere).
-    
-    Errori di comprensione (AI può risolvere):
-    - Vino non trovato (parsing sbagliato, nome vino malformato)
-    - Errori che indicano che l'intent classifier ha capito male
-    
-    Errori tecnici (NON passare all'AI):
-    - Business name non trovato
-    - Timeout / HTTP error
-    - Errori di connessione
-    - Errori di validazione input (campi vuoti)
-    """
-    if not error_msg:
-        return False
-    
-    error_lower = error_msg.lower()
-    
-    # Errori di comprensione (AI può risolvere)
-    comprehension_indicators = [
-        "wine not found",
-        "vino non trovato",
-        "non ho trovato",
-        "non trovato",
-        "not found",
-        "nessun vino",
-        "nessun risultato",
-        "no results",
-        "errore sconosciuto",  # Quando il parsing è completamente sbagliato
-    ]
-    
-    # Errori tecnici (NON passare all'AI)
-    technical_indicators = [
-        "business name non trovato",
-        "business name non configurato",
-        "onboarding",
-        "timeout",
-        "http error",
-        "http client error",
-        "connection error",
-        "errore connessione",
-        "nome vino o quantità non validi",  # Validazione input (campi vuoti)
-        "quantità non valida",
-        "telegram_id non trovato",
-    ]
-    
-    # Controlla prima errori tecnici (priorità)
-    for indicator in technical_indicators:
-        if indicator in error_lower:
-            return False  # Errore tecnico, NON passare all'AI
-    
-    # Controlla errori di comprensione
-    for indicator in comprehension_indicators:
-        if indicator in error_lower:
-            return True  # Errore comprensione, passa all'AI
-    
-    # Default: se non riconosciuto, assume errore tecnico (non passare all'AI)
-    return False
-
-
 async def help_cmd(update, context):
     help_text = (
         "🤖 **Gio.ia-bot - Comandi disponibili:**\n\n"
         "📋 **Comandi base:**\n"
         "• `/start` - Avvia il bot o mostra il profilo\n"
         "• `/help` - Mostra questo messaggio di aiuto\n"
-        "• `/view` - Genera link per visualizzare inventario completo\n"
+        "• `/view` - Link al viewer web dell'inventario\n"
         "• `/aggiungi` - Aggiungi un nuovo vino\n"
         "• `/upload` - Carica inventario da file/foto\n"
         "• `/scorte` - Mostra vini con scorte basse\n"
@@ -606,24 +157,6 @@ async def help_cmd(update, context):
 
 
 async def chat_handler(update, context):
-    """Gestisce messaggi di chat generici"""
-    telegram_id = update.effective_user.id
-    
-    # Verifica se c'è un job in corso per questo utente
-    async with _pending_jobs_lock:
-        if telegram_id in _pending_jobs:
-            job_info = _pending_jobs[telegram_id]
-            await update.message.reply_text(
-                "🔄 **Stiamo lavorando sul tuo inventario!**\n\n"
-                f"📄 **File**: {job_info.get('file_name', 'Sconosciuto')}\n"
-                f"⏱️ **Elaborazione in corso...**\n\n"
-                f"Ti manderò un messaggio appena pronto! ✅\n\n"
-                f"📋 Job ID: `{job_info.get('job_id', 'N/A')}`\n\n"
-                f"💡 Nel frattempo puoi continuare a usare il bot per altre operazioni.",
-                parse_mode='Markdown'
-            )
-            return
-    
     # Gestione input per aggiornamento campo vino in sospeso
     pending = context.user_data.get('pending_field_update')
     if pending and update.message and update.message.text:
@@ -732,101 +265,18 @@ async def chat_handler(update, context):
         except Exception:
             pass
         
+        # Gestisci movimenti inventario
+        logger.info(f"[BOT] Calling process_movement_message for: {user_text[:50]}...")
+        movement_handled = await inventory_movement_manager.process_movement_message(update, context)
+        if movement_handled:
+            logger.info(f"[BOT] Movement message handled, not passing to AI")
+            return
+        else:
+            logger.info(f"[BOT] Movement message NOT handled, passing to AI")
+        
         # Gestisci aggiunta vino se in corso - ASYNC
         if await inventory_manager.handle_wine_data(update, context):
             return
-        
-        # ✅ NUOVO: Intent Classifier (NO AI) - 5 Retry (PRIMA di process_movement_message per gestire movimenti multipli)
-        from .intent_classifier import IntentClassifier
-        from .intent_handler import IntentHandler
-        
-        intent_classifier = IntentClassifier()
-        intent = await intent_classifier.classify_with_retry(user_text, telegram_id)
-        
-        # Se intent trovato (inclusi movimenti multipli), esegui direttamente (NO AI, NO process_movement_message)
-        intent_found_but_failed = False  # Flag per tracciare se intent trovato ma esecuzione fallita con errore comprensione
-        
-        if intent.type != "unknown":
-            # Se è un movimento (singolo o multiplo), gestiscilo con Intent Handler
-            if intent.type in ["movement_consumption", "movement_replenishment", "multiple_movements"]:
-                logger.info(
-                    f"[BOT] Movimento riconosciuto: {intent.type} "
-                    f"(confidence={intent.confidence:.2f}) - Gestito con Intent Handler"
-                )
-                
-                handler = IntentHandler(telegram_id, context)
-                result = await handler.execute_intent(intent)
-                
-                if result.get("success"):
-                    parse_mode = result.get("parse_mode", 'Markdown')
-                    await update.message.reply_text(
-                        result.get("formatted_message", "✅ Operazione completata"),
-                        parse_mode=parse_mode
-                    )
-                    return  # ✅ Successo, termina qui
-                else:
-                    # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
-                    error_msg = result.get("error", "Errore sconosciuto")
-                    
-                    # Controlla se è un errore di comprensione (AI può risolvere)
-                    if _is_comprehension_error(error_msg):
-                        logger.info(
-                            f"[BOT] Esecuzione movimento fallita con errore comprensione: '{error_msg}' - "
-                            f"Passando all'AI come fallback"
-                        )
-                        intent_found_but_failed = True  # ✅ Flag: intent trovato ma fallito con errore comprensione
-                        # NON fare return, continua al fallback AI sotto (SALTA process_movement_message)
-                    else:
-                        # Errore tecnico, mostra e termina
-                        await update.message.reply_text(f"❌ {error_msg}")
-                        return
-            
-            # Se è un altro intent (ricerca, lista, etc.), gestiscilo normalmente
-            else:
-                logger.info(
-                    f"[BOT] Intent trovato dopo {intent.retry_count} retry: {intent.type} "
-                    f"(confidence={intent.confidence:.2f}) - Gestito SENZA AI"
-                )
-                
-                handler = IntentHandler(telegram_id, context)
-                result = await handler.execute_intent(intent)
-                
-                if result.get("success"):
-                    parse_mode = result.get("parse_mode", 'Markdown')
-                    await update.message.reply_text(
-                        result.get("formatted_message", "✅ Operazione completata"),
-                        parse_mode=parse_mode
-                    )
-                    return  # ✅ Successo, termina qui
-                else:
-                    # ✅ FALLBACK AI: Se esecuzione fallisce, controlla se è errore di comprensione
-                    error_msg = result.get("error", "Errore sconosciuto")
-                    
-                    # Controlla se è un errore di comprensione (AI può risolvere)
-                    if _is_comprehension_error(error_msg):
-                        logger.info(
-                            f"[BOT] Esecuzione intent fallita con errore comprensione: '{error_msg}' - "
-                            f"Passando all'AI come fallback"
-                        )
-                        intent_found_but_failed = True  # ✅ Flag: intent trovato ma fallito con errore comprensione
-                        # NON fare return, continua al fallback AI sotto (SALTA process_movement_message)
-                    else:
-                        # Errore tecnico, mostra e termina
-                        await update.message.reply_text(f"❌ {error_msg}")
-                        return
-        
-        # ✅ FALLBACK: Se Intent Classifier NON ha riconosciuto (intent.type == "unknown")
-        # E NON è un caso di intent trovato ma fallito con errore comprensione
-        # Allora prova process_movement_message (per compatibilità)
-        if not intent_found_but_failed:
-            logger.info(f"[BOT] Intent unknown, provando process_movement_message come fallback...")
-            movement_handled = await inventory_movement_manager.process_movement_message(update, context)
-            if movement_handled:
-                logger.info(f"[BOT] Movement message handled da process_movement_message")
-                return
-        
-        # ✅ FALLBACK AI: Se intent unknown O se esecuzione intent fallita con errore comprensione
-        logger.info(f"[BOT] Passando all'AI come fallback (intent unknown o errore comprensione)")
         
         await update.message.reply_text("💭 Sto pensando...")
         
@@ -851,39 +301,6 @@ async def chat_handler(update, context):
                 await update.message.reply_text(movement_result)
                 logger.info(f"Movimento processato e risposta inviata a {username}")
                 return
-        
-        # Selezione vino quando ci sono più corrispondenze (AI marker)
-        if reply and reply.startswith("[[WINE_SELECTION:"):
-            try:
-                # Estrai termine di ricerca dal marker
-                search_term = reply.replace("[[WINE_SELECTION:", "").replace("]]", "").strip()
-                
-                # Cerca tutti i vini corrispondenti
-                matching_wines = await async_db_manager.search_wines(telegram_id, search_term, limit=10)
-                
-                if len(matching_wines) > 1:
-                    message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{search_term}'**\n\n"
-                    message += "Quale tra questi intendi?\n\n"
-                    
-                    # Crea pulsanti inline con i nomi completi dei vini
-                    keyboard = []
-                    for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
-                        wine_display = wine.name
-                        if wine.producer:
-                            wine_display += f" ({wine.producer})"
-                        if wine.vintage:
-                            wine_display += f" {wine.vintage}"
-                        
-                        # Callback data: wine_info:{wine_id}
-                        callback_data = f"wine_info:{wine.id}"
-                        keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
-                    
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-                    return
-            except Exception as e:
-                logger.error(f"Errore gestione selezione vino: {e}")
-                # Fallback: continua con risposta normale
         
         # Richiesta periodo movimenti (AI marker)
         if reply and '[[ASK_MOVES_PERIOD]]' in reply:
@@ -989,7 +406,6 @@ async def chat_handler(update, context):
         try:
             from .admin_notifications import enqueue_admin_notification
             from .structured_logging import get_correlation_id
-            from .database_async import async_db_manager
             
             user = update.effective_user
             telegram_id = user.id if user else None
@@ -1019,11 +435,6 @@ async def chat_handler(update, context):
 
 
 # Comandi inventario
-async def inventario_cmd(update, context):
-    """Mostra l'inventario dell'utente"""
-    await inventory_manager.show_inventory(update, context)
-
-
 async def aggiungi_cmd(update, context):
     """Avvia l'aggiunta di un vino"""
     await inventory_manager.start_add_wine(update, context)
@@ -1042,6 +453,55 @@ async def upload_cmd(update, context):
 async def log_cmd(update, context):
     """Mostra i log dei movimenti inventario"""
     await inventory_movement_manager.show_movement_logs(update, context)
+
+
+async def view_cmd(update, context):
+    """Genera e invia link al viewer dell'inventario"""
+    user = update.effective_user
+    telegram_id = user.id
+    
+    try:
+        from .database_async import async_db_manager
+        from .viewer_utils import generate_viewer_token, get_viewer_url
+        
+        # Verifica se l'utente ha completato l'onboarding
+        user_data = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        
+        if not user_data or not user_data.business_name:
+            await update.message.reply_text(
+                "⚠️ **Onboarding non completato**\n\n"
+                "Completa prima l'onboarding con `/start` per accedere al viewer."
+            )
+            return
+        
+        # Genera token JWT
+        token = generate_viewer_token(telegram_id, user_data.business_name)
+        
+        if not token:
+            await update.message.reply_text(
+                "❌ **Errore generazione link**\n\n"
+                "Impossibile generare il link al viewer. Riprova tra qualche momento."
+            )
+            return
+        
+        # Genera URL completo
+        viewer_url = get_viewer_url(token)
+        
+        await update.message.reply_text(
+            f"🔗 **Link al tuo inventario**\n\n"
+            f"📋 **Locale:** {user_data.business_name}\n\n"
+            f"👉 [Apri inventario nel viewer]({viewer_url})\n\n"
+            f"💡 Il link è valido per 1 ora.",
+            parse_mode='Markdown',
+            disable_web_page_preview=False
+        )
+        
+    except Exception as e:
+        logger.error(f"Errore comando /view: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ **Errore**\n\n"
+            "Si è verificato un errore. Riprova tra qualche momento."
+        )
 
 async def cancella_schema_cmd(update, context):
     """
@@ -1324,59 +784,6 @@ async def callback_handler(update, context):
         except Exception:
             pass
 
-    # Gestisci callback movimenti (selezione vino da pulsanti)
-    if query.data and query.data.startswith("movimento_consumo:"):
-        try:
-            _, wine_id_str, quantity_str = query.data.split(":")
-            wine_id = int(wine_id_str)
-            quantity = int(quantity_str)
-            if await inventory_movement_manager.process_movement_from_callback(update, context, wine_id, 'consumo', quantity):
-                return
-        except Exception as e:
-            logger.error(f"Errore callback movimento consumo: {e}")
-    
-    if query.data and query.data.startswith("movimento_rifornimento:"):
-        try:
-            _, wine_id_str, quantity_str = query.data.split(":")
-            wine_id = int(wine_id_str)
-            quantity = int(quantity_str)
-            if await inventory_movement_manager.process_movement_from_callback(update, context, wine_id, 'rifornimento', quantity):
-                return
-        except Exception as e:
-            logger.error(f"Errore callback movimento rifornimento: {e}")
-    
-    # Gestisci callback selezione vino per info
-    if query.data and query.data.startswith("wine_info:"):
-        try:
-            from .database_async import async_db_manager
-            _, wine_id_str = query.data.split(":")
-            wine_id = int(wine_id_str)
-            telegram_id = update.effective_user.id
-            
-            # Recupera il vino dall'ID
-            user_wines = await async_db_manager.get_user_wines(telegram_id)
-            selected_wine = None
-            for wine in user_wines:
-                if wine.id == wine_id:
-                    selected_wine = wine
-                    break
-            
-            if not selected_wine:
-                await query.answer("❌ Vino non trovato.", show_alert=True)
-                return
-            
-            # Mostra info complete del vino
-            from .response_templates import format_wine_info
-            wine_info_text = format_wine_info(selected_wine)
-            
-            await query.answer(f"📋 Informazioni su {selected_wine.name}")
-            await query.edit_message_text(wine_info_text, parse_mode='Markdown')
-            return
-        except Exception as e:
-            logger.error(f"Errore callback info vino: {e}")
-            if update.callback_query:
-                await update.callback_query.answer("❌ Errore durante il recupero informazioni.", show_alert=True)
-    
     # Gestisci callback inventario - ASYNC
     if await inventory_manager.handle_wine_callback(update, context):
         return
@@ -1401,123 +808,16 @@ async def healthcheck_handler(request: web.Request):
     return web.Response(text="OK", status=200)
 
 
-async def viewer_link_ready_handler(request):
-    """
-    Endpoint per ricevere link pronto dal viewer.
-    """
-    from .structured_logging import log_with_context
-    
-    try:
-        # Prova a chiamare request.json() - può essere sync o async
-        try:
-            if callable(getattr(request, 'json', None)):
-                json_method = request.json
-                import inspect
-                if inspect.iscoroutinefunction(json_method):
-                    data = await json_method()
-                else:
-                    data = json_method()
-            else:
-                # Fallback per mock request
-                data = getattr(request, '_json_data', {})
-        except Exception as json_error:
-            logger.error(f"[VIEWER_CALLBACK] Errore parsing JSON: {json_error}", exc_info=True)
-            return web.Response(
-                json={"status": "error", "message": f"Errore parsing JSON: {str(json_error)}"},
-                status=400
-            )
-        
-        telegram_id = data.get('telegram_id')
-        viewer_url = data.get('viewer_url')
-        correlation_id = data.get('correlation_id')
-        
-        log_with_context(
-            "info",
-            f"[VIEWER_CALLBACK] Link ricevuto dal viewer: telegram_id={telegram_id}, "
-            f"viewer_url={viewer_url[:100]}..., correlation_id={correlation_id}",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        if not telegram_id or not viewer_url:
-            log_with_context(
-                "warning",
-                f"[VIEWER_CALLBACK] Dati mancanti: telegram_id={telegram_id}, viewer_url={bool(viewer_url)}",
-                telegram_id=telegram_id if telegram_id else 0,
-                correlation_id=correlation_id
-            )
-            return web.json_response(
-                {"status": "error", "message": "telegram_id e viewer_url richiesti"},
-                status=400
-            )
-        
-        log_with_context(
-            "info",
-            f"[VIEWER_CALLBACK] Link pronto per telegram_id={telegram_id}, "
-            f"correlation_id={correlation_id}. Sveglio evento...",
-            telegram_id=telegram_id,
-            correlation_id=correlation_id
-        )
-        
-        # Sveglia l'evento per il comando /view in attesa
-        async with _viewer_pending_lock:
-            pending_data = _viewer_pending_requests.get(telegram_id)
-            if pending_data:
-                # Aggiorna il link e sveglia l'evento
-                pending_data['viewer_url'] = viewer_url
-                event = pending_data.get('event')
-                if event:
-                    event.set()
-                    log_with_context(
-                        "info",
-                        f"[VIEWER_CALLBACK] Event svegliato per telegram_id={telegram_id}, "
-                        f"correlation_id={correlation_id}",
-                        telegram_id=telegram_id,
-                        correlation_id=correlation_id
-                    )
-                else:
-                    log_with_context(
-                        "warning",
-                        f"[VIEWER_CALLBACK] Nessun evento trovato per telegram_id={telegram_id}, "
-                        f"correlation_id={correlation_id}",
-                        telegram_id=telegram_id,
-                        correlation_id=correlation_id
-                    )
-            else:
-                log_with_context(
-                    "warning",
-                    f"[VIEWER_CALLBACK] Nessuna richiesta in attesa per telegram_id={telegram_id}, "
-                    f"correlation_id={correlation_id}",
-                    telegram_id=telegram_id,
-                    correlation_id=correlation_id
-                )
-        
-        return web.json_response(
-            {"status": "success", "message": "Link ricevuto e processato"},
-            status=200
-        )
-        
-    except Exception as e:
-        logger.error(f"[VIEWER_CALLBACK] Errore gestione callback: {e}", exc_info=True)
-        return web.json_response(
-            {"status": "error", "message": str(e)},
-            status=500
-        )
-
-
 
 
 def _start_health_server(port: int) -> None:
     # Avvia un piccolo server HTTP in un thread separato sulla porta di Railway
     import threading
-    import json
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from urllib.parse import urlparse
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            parsed_path = urlparse(self.path)
-            if parsed_path.path == "/healthcheck":
+            if self.path == "/healthcheck":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.end_headers()
@@ -1525,136 +825,43 @@ def _start_health_server(port: int) -> None:
             else:
                 self.send_response(404)
                 self.end_headers()
-        
-        def do_POST(self):
-            """Gestisci POST per /api/viewer/link-ready"""
-            import asyncio
-            from urllib.parse import urlparse
-            
-            parsed_path = urlparse(self.path)
-            logger.info(f"[HEALTH_SERVER] 📥 Richiesta POST ricevuta: path={parsed_path.path}, method={self.command}, client={self.client_address}, headers_count={len(self.headers)}")
-            
-            # Log headers importanti
-            content_type = self.headers.get('Content-Type', 'N/A')
-            content_length = self.headers.get('Content-Length', '0')
-            logger.info(f"[HEALTH_SERVER] Headers: Content-Type={content_type}, Content-Length={content_length}")
-            
-            if parsed_path.path == "/api/viewer/link-ready":
-                try:
-                    logger.info(f"[HEALTH_SERVER] Processing /api/viewer/link-ready")
-                    # Leggi body JSON
-                    content_length = int(self.headers.get('Content-Length', 0))
-                    if content_length == 0:
-                        logger.warning(f"[HEALTH_SERVER] Body vuoto per /api/viewer/link-ready")
-                        self.send_error(400, "Body vuoto")
-                        return
-                    
-                    body = self.rfile.read(content_length)
-                    data = json.loads(body.decode('utf-8'))
-                    logger.info(f"[HEALTH_SERVER] Body ricevuto: {json.dumps(data)[:200]}")
-                    
-                    # Esegui handler asincrono direttamente
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        # Chiama handler direttamente con i dati (non serve mock request)
-                        logger.info(f"[HEALTH_SERVER] Chiamando viewer_link_ready_handler con data: {json.dumps(data)[:200]}")
-                        
-                        # Crea un oggetto semplice che simula request.json()
-                        class SimpleRequest:
-                            def __init__(self, json_data):
-                                self._json_data = json_data
-                            async def json(self):
-                                return self._json_data
-                        
-                        simple_request = SimpleRequest(data)
-                        result = loop.run_until_complete(viewer_link_ready_handler(simple_request))
-                        logger.info(f"[HEALTH_SERVER] Handler completato, result type: {type(result)}")
-                        
-                        # Estrai risposta
-                        if isinstance(result, web.Response):
-                            self.send_response(result.status)
-                            self.send_header('Content-Type', 'application/json')
-                            self.end_headers()
-                            # web.Response ha text o body
-                            if hasattr(result, 'text'):
-                                body_text = result.text
-                            elif hasattr(result, 'body'):
-                                body_text = result.body.decode('utf-8') if isinstance(result.body, bytes) else str(result.body)
-                            else:
-                                body_text = '{"status":"ok"}'
-                            self.wfile.write(body_text.encode('utf-8') if isinstance(body_text, str) else body_text)
-                        else:
-                            self.send_response(200)
-                            self.send_header('Content-Type', 'application/json')
-                            self.end_headers()
-                            self.wfile.write(json.dumps({"status": "success"}).encode('utf-8'))
-                    finally:
-                        loop.close()
-                except Exception as e:
-                    logger.error(f"Errore gestione POST /api/viewer/link-ready: {e}", exc_info=True)
-                    self.send_error(500, f"Internal server error: {e}")
-            else:
-                self.send_response(404)
-                self.end_headers()
-        
         def log_message(self, format, *args):
             return  # silenzia il logging di BaseHTTPRequestHandler
 
     def serve():
         httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
-        logger.info(f"✅ Health server AVVIATO in ascolto su 0.0.0.0:{port} - Gestisce GET /healthcheck e POST /api/viewer/link-ready")
-        try:
-            httpd.serve_forever()
-        except Exception as server_error:
-            logger.error(f"❌ Errore health server: {server_error}", exc_info=True)
+        logger.info(f"Health server in ascolto su 0.0.0.0:{port}")
+        httpd.serve_forever()
 
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
 
 
 def main():
-    logger.info("=" * 50)
-    logger.info("🚀 AVVIO BOT - Inizializzazione...")
-    logger.info(f"TELEGRAM_BOT_TOKEN: {'✅ Presente' if TELEGRAM_BOT_TOKEN else '❌ MANCANTE'}")
-    logger.info(f"BOT_MODE: {BOT_MODE}")
-    logger.info(f"PORT: {PORT}")
-    logger.info("=" * 50)
-    
     # Configurazione bot senza parametri non supportati
+    builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
+    
+    # Rimuovi eventuali parametri proxy se presenti
     try:
-        logger.info("🔧 Creazione Application builder...")
-        builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
-        logger.info("✅ Builder creato")
-        
-        logger.info("🔧 Building Application...")
         app = builder.build()
-        logger.info("✅ Application build completato")
     except Exception as e:
-        logger.error(f"❌ Errore configurazione bot: {e}", exc_info=True)
+        logger.error(f"Errore configurazione bot: {e}")
         # Fallback con configurazione minima
-        logger.info("🔄 Tentativo fallback con configurazione minima...")
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        logger.info("✅ Fallback completato")
     
     # Comandi base
-    logger.info("📝 Registrazione handlers...")
     app.add_handler(CommandHandler("start", start_cmd))
-    logger.info("✅ Handler /start registrato")
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("view", view_cmd))
     app.add_handler(CommandHandler("testai", testai_cmd))
     app.add_handler(CommandHandler("testprocessor", testprocessor_cmd))
     app.add_handler(CommandHandler("deletewebhook", deletewebhook_cmd))
-    logger.info("✅ Altri comandi base registrati")
     
     # Comandi inventario
-    app.add_handler(CommandHandler("inventario", inventario_cmd))
     app.add_handler(CommandHandler("aggiungi", aggiungi_cmd))
     app.add_handler(CommandHandler("upload", upload_cmd))
     app.add_handler(CommandHandler("scorte", scorte_cmd))
     app.add_handler(CommandHandler("log", log_cmd))
-    logger.info("✅ Comandi inventario registrati")
+    app.add_handler(CommandHandler("view", view_cmd))
     
     # Comando admin (solo per 927230913)
     app.add_handler(CommandHandler("cancellaschema", cancella_schema_cmd))
@@ -1668,147 +875,30 @@ def main():
     # File handlers
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document_with_onboarding))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_onboarding))
-    logger.info("✅ Tutti gli handlers registrati")
-    
-    # BUG #2 FIX: Error handler per catturare tutte le eccezioni non gestite
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Gestisce errori non catturati dagli handler."""
-        logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
-        
-        # Prova a inviare messaggio errore se update è valido
-        if update and hasattr(update, 'effective_message') and update.effective_message:
-            try:
-                await update.effective_message.reply_text(
-                    "⚠️ **Errore**\n\n"
-                    "Si è verificato un errore imprevisto.\n"
-                    "Riprova tra qualche istante."
-                )
-            except Exception as reply_error:
-                logger.error(f"Errore invio messaggio errore: {reply_error}")
-    
-    app.add_error_handler(error_handler)
-    logger.info("✅ Error handler registrato")
 
     # Su Railway usiamo polling + server HTTP per healthcheck sulla PORT
     use_polling_with_health = os.getenv("RAILWAY_ENVIRONMENT") is not None or BOT_MODE != "webhook"
-    logger.info(f"🔍 use_polling_with_health: {use_polling_with_health}")
-    logger.info(f"🔍 RAILWAY_ENVIRONMENT: {os.getenv('RAILWAY_ENVIRONMENT')}")
-    logger.info(f"🔍 BOT_MODE: {BOT_MODE}")
-    
     if use_polling_with_health:
-        logger.info(f"📡 Starting health server + polling on 0.0.0.0:{PORT}")
+        logger.info(f"Starting health server + polling on 0.0.0.0:{PORT}")
         # Avvia server health (thread daemon) e poi polling
-        try:
-            _start_health_server(PORT)
-            logger.info("✅ Health server avviato")
-        except Exception as e:
-            logger.error(f"❌ Errore avvio health server: {e}", exc_info=True)
-        
-        # IMPORTANTE: Elimina webhook prima di avviare polling (evita Conflict)
-        # Usa chiamata HTTP diretta all'API Telegram (più affidabile)
-        logger.info("🔧 Eliminazione webhook esistente (se presente)...")
-        try:
-            import urllib.request
-            import json
-            import time
-            
-            # Chiama direttamente l'API Telegram per eliminare il webhook
-            api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-            
-            logger.info(f"📡 Chiamata API: {api_url[:50]}...")
-            request = urllib.request.Request(api_url, method='POST')
-            
-            with urllib.request.urlopen(request, timeout=10) as response:
-                result = json.loads(response.read().decode())
-                
-                if result.get('ok'):
-                    logger.info("✅ Webhook eliminato con successo via API")
-                    # Usa asyncio per sleep anche in contesto sync (durante avvio)
-                    import time
-                    time.sleep(2)  # Attendi 2 secondi per permettere a Telegram di processare
-                else:
-                    description = result.get('description', 'Unknown error')
-                    logger.warning(f"⚠️ Risposta API: {description}")
-                    if 'webhook is not set' in description.lower():
-                        logger.info("ℹ️ Nessun webhook presente (OK)")
-                    else:
-                        logger.warning(f"⚠️ Possibile errore eliminazione webhook: {description}")
-        except Exception as e:
-            logger.error(f"❌ Errore eliminazione webhook via API: {e}", exc_info=True)
-            logger.warning("⚠️ Continuo comunque con l'avvio polling...")
-        
+        _start_health_server(PORT)
         # Avvia il polling (bloccante) con gestione conflitti
-        # run_polling() dovrebbe eliminare automaticamente il webhook, ma facciamo retry se necessario
-        max_retries = 3
-        retry_count = 0
-        import time
-        
-        while retry_count < max_retries:
-            try:
-                if retry_count > 0:
-                    logger.info(f"🔄 Tentativo {retry_count + 1}/{max_retries} di avvio polling...")
-                    # Tra un tentativo e l'altro, prova di nuovo a eliminare il webhook
-                    try:
-                        import asyncio
-                        async def _delete_webhook_retry():
-                            if not app.bot.initialized:
-                                await app.bot.initialize()
-                            await app.bot.delete_webhook(drop_pending_updates=True)
-                            logger.info("✅ Webhook eliminato al retry")
-                        
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if not loop.is_running():
-                                asyncio.run(_delete_webhook_retry())
-                                # Usa asyncio per sleep anche in contesto sync
-                                import time
-                                time.sleep(3)
-                        except RuntimeError:
-                            asyncio.run(_delete_webhook_retry())
-                            import time
-                            time.sleep(3)
-                    except Exception as e2:
-                        logger.warning(f"⚠️ Errore eliminazione webhook al retry: {e2}")
-                    else:
-                        import time
-                        time.sleep(5)  # Attendi 5 secondi tra i tentativi
-                else:
-                    logger.info("🔄 Avvio polling...")
-                
-                # run_polling() elimina automaticamente il webhook se presente
-                app.run_polling(
-                    allowed_updates=["message", "callback_query"],
-                    drop_pending_updates=True
-                )
-                logger.info("✅ Polling avviato con successo")
-                break  # Esci dal loop se il polling è partito
-            except Exception as e:
-                error_msg = str(e)
-                if "Conflict" in error_msg or "terminated by other getUpdates" in error_msg:
-                    logger.error(f"❌ Conflict: un'altra istanza sta già facendo polling (tentativo {retry_count + 1}/{max_retries})")
-                    
-                    if retry_count < max_retries - 1:
-                        logger.info("🔧 Attendo e riprovo...")
-                    else:
-                        logger.error(f"❌ Impossibile avviare polling dopo {max_retries} tentativi")
-                        logger.error("⚠️ VERIFICA: C'è un'altra istanza del bot in esecuzione su Railway?")
-                        logger.error("⚠️ SOLUZIONE: Ferma tutte le istanze del bot e riavvia una sola")
-                        raise
-                    
-                    retry_count += 1
-                else:
-                    logger.error(f"❌ Errore polling: {e}", exc_info=True)
-                    raise  # Rilancia errori non-Conflict
+        try:
+            app.run_polling(
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+        except Exception as e:
+            logger.error(f"Errore polling: {e}")
+            logger.info("Riprovo polling in 5 secondi...")
+            import time
+            time.sleep(5)
+            app.run_polling(drop_pending_updates=True)
         return
 
     # Modalità webhook classica (senza health server, non compatibile su PTB 21.5)
-    logger.info("📡 Starting bot in webhook mode (senza healthcheck HTTP)")
-    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
-    try:
-        app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=WEBHOOK_URL)
-        logger.info("✅ Webhook avviato con successo")
-    except Exception as e:
-        logger.error(f"❌ Errore avvio webhook: {e}", exc_info=True)
+    logger.info("Starting bot in webhook mode (senza healthcheck HTTP)")
+    app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=WEBHOOK_URL)
 
 if __name__ == "__main__":
     main()

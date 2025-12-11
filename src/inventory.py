@@ -212,7 +212,7 @@ class InventoryManager:
                 f"📅 **Annata:** {wine.vintage or 'N/A'}\n"
                 f"🍷 **Tipo:** {wine.wine_type or 'N/A'}\n"
                 f"📦 **Quantità:** {wine.quantity} bottiglie\n\n"
-                "💡 Usa `/inventario` per vedere il tuo inventario completo!"
+                "💡 Usa `/view` per vedere il tuo inventario completo!"
             )
             await update.message.reply_text(success_message, parse_mode='Markdown')
         else:

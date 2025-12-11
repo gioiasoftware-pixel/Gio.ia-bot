@@ -517,14 +517,14 @@ class InventoryMovementManager:
             await update.message.reply_text(
                 f"❌ **Vino non trovato**\n\n"
                 f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili.\n\n"
+                f"💡 Controlla il nome o usa `/view` per vedere i vini disponibili.\n\n"
                 f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
             )
         elif 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
             await update.message.reply_text(
                 f"⚠️ **Quantità insufficiente**\n\n"
                 f"🍷 Richieste: {quantity} bottiglie\n\n"
-                f"💡 Verifica la quantità disponibile con `/inventario`."
+                f"💡 Verifica la quantità disponibile con `/view`."
             )
         else:
             await update.message.reply_text(

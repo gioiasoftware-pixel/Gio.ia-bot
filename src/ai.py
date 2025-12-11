@@ -123,7 +123,7 @@ async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> s
         return format_inventory_list(wines, limit=limit)
     except Exception as e:
         logger.error(f"Errore creazione lista inventario: {e}")
-        return "⚠️ Errore nel recupero dell'inventario. Riprova con /inventario."
+        return "⚠️ Errore nel recupero dell'inventario. Riprova con /view."
 
 
 def _parse_filters(prompt: str) -> dict:
@@ -483,7 +483,7 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
                 return (
                     f"❌ **Vino non trovato**\n\n"
                     f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                    f"💡 Controlla il nome o usa `/inventario` per vedere i vini disponibili."
+                    f"💡 Controlla il nome o usa `/view` per vedere i vini disponibili."
                 )
             elif 'insufficiente' in error_msg.lower():
                 return (
@@ -770,7 +770,7 @@ ISTRUZIONI IMPORTANTI:
 - Usa sempre i dati dell'inventario e dei movimenti quando disponibili
 - Sii specifico e pratico nei consigli
 - Se l'utente comunica consumi/rifornimenti, conferma e analizza
-- Suggerisci comandi del bot quando appropriato (es: /inventario, /log)
+- Suggerisci comandi del bot quando appropriato (es: /view, /log)
 - Se l'inventario ha scorte basse, avvisa proattivamente
 - Se l'utente fa domande generiche, usa il contesto per essere specifico
 - Se l'utente chiede di vedere tutti i vini o l'inventario completo, usa la funzione tool "generate_view_link" per inviare il link del viewer
@@ -828,7 +828,7 @@ Per domande informative, usa questi formati con dati reali dal database:
 Non ho trovato 'nome' nel tuo inventario.
 💡 **Cosa puoi fare:**
 • Controlla l'ortografia del nome
-• Usa /inventario per vedere tutti i vini
+• Usa /view per vedere tutti i vini
 • Usa /aggiungi per aggiungere un nuovo vino
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

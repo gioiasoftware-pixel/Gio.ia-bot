@@ -383,7 +383,7 @@ class FileUploadManager:
                     f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
                     f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
                     f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
-                    f"• Consultare inventario: `/inventario`"
+                    f"• Consultare inventario: `/view`"
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
@@ -574,7 +574,7 @@ class FileUploadManager:
                     f"• Comunicare consumi: \"Ho venduto 3 Barolo\"\n"
                     f"• Comunicare rifornimenti: \"Ho ricevuto 10 Vermentino\"\n"
                     f"• Chiedere informazioni: \"Quanto Sassicaia ho in cantina?\"\n"
-                    f"• Consultare inventario: `/inventario`"
+                    f"• Consultare inventario: `/view`"
                 )
                 
                 await update.message.reply_text(message, parse_mode='Markdown')
