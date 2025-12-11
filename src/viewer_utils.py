@@ -9,10 +9,18 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Secret key condivisa con processor (da variabile ambiente)
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-in-production-secret-key-2025")
+# Secret key condivisa con processor (da variabile ambiente Railway)
+# OBBLIGATORIA: Deve essere configurata su Railway → Settings → Variables
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 1  # Token valido per 1 ora
+
+# Verifica che JWT_SECRET_KEY sia configurata
+if not JWT_SECRET_KEY:
+    logger.error("[VIEWER_TOKEN] ❌ JWT_SECRET_KEY non configurata!")
+    logger.error("[VIEWER_TOKEN] Configura JWT_SECRET_KEY su Railway → Settings → Variables")
+    logger.error("[VIEWER_TOKEN] Deve essere la STESSA chiave del viewer!")
+    raise ValueError("JWT_SECRET_KEY non configurata - configura su Railway")
 
 
 def generate_viewer_token(telegram_id: int, business_name: str, correlation_id: Optional[str] = None) -> Optional[str]:
