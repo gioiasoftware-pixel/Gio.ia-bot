@@ -315,6 +315,41 @@ async def chat_handler(update, context):
             except Exception as e:
                 logger.error(f"Errore invio bottoni periodo: {e}")
                 # fallback: continua
+        
+        # Gestione WINE_SELECTION marker - mostra risultati ricerca vini
+        if reply and '[[WINE_SELECTION:' in reply:
+            try:
+                # Estrai termine di ricerca dal marker
+                marker_start = reply.find('[[WINE_SELECTION:')
+                marker_end = reply.find(']]', marker_start)
+                if marker_start >= 0 and marker_end >= 0:
+                    search_term = reply[marker_start + 17:marker_end]  # 17 = len("[[WINE_SELECTION:")
+                    
+                    logger.info(f"[BOT] Processing WINE_SELECTION marker for search term: {search_term}")
+                    
+                    # Cerca vini nel database
+                    from .database_async import async_db_manager
+                    from .response_templates import format_inventory_list
+                    
+                    found_wines = await async_db_manager.search_wines(telegram_id, search_term, limit=50)
+                    
+                    if found_wines:
+                        # Mostra risultati formattati
+                        formatted_response = format_inventory_list(found_wines, limit=50)
+                        await update.message.reply_text(formatted_response, parse_mode='Markdown')
+                        logger.info(f"[BOT] Mostrati {len(found_wines)} vini per ricerca '{search_term}'")
+                        return
+                    else:
+                        # Nessun vino trovato
+                        await update.message.reply_text(
+                            f"❌ **Nessun vino trovato**\n\n"
+                            f"Non ho trovato vini corrispondenti a '{search_term}' nel tuo inventario.\n\n"
+                            f"💡 Prova con un termine di ricerca diverso o usa `/view` per vedere tutto l'inventario."
+                        )
+                        return
+            except Exception as e:
+                logger.error(f"Errore gestione WINE_SELECTION marker: {e}", exc_info=True)
+                # Fallback: continua con risposta normale
 
         # Risposta normale AI con eventuali bottoni per compilare/modificare campi
         if reply and ("[[FILL_FIELDS:" in reply or "[[EDIT_FIELDS:" in reply):
