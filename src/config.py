@@ -31,7 +31,8 @@ PROCESSOR_URL_RAW = os.getenv("PROCESSOR_URL", "https://gioia-processor-producti
 PROCESSOR_URL = _normalize_url(PROCESSOR_URL_RAW)
 
 # Viewer Microservice
-VIEWER_URL = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
+VIEWER_URL_RAW = os.getenv("VIEWER_URL", "https://vineinventory-viewer-production.up.railway.app")
+VIEWER_URL = _normalize_url(VIEWER_URL_RAW)
 
 def validate_config():
     """Valida le configurazioni critiche all'avvio."""
