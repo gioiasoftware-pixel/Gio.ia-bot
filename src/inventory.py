@@ -217,6 +217,30 @@ class InventoryManager:
             await update.message.reply_text(success_message, parse_mode='Markdown')
         else:
             await update.message.reply_text("❌ Errore durante l'aggiunta del vino. Riprova.")
+            
+            # Notifica admin per errore aggiunta vino
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                user = update.effective_user
+                telegram_id = user.id if user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "add_wine_error",
+                            "error_message": "Errore durante aggiunta vino (dettaglio non disponibile)",
+                            "error_code": "ADD_WINE_ERROR",
+                            "component": "telegram-ai-bot",
+                            "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
+                            "user_visible_error": "❌ Errore durante l'aggiunta del vino. Riprova."
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
         
         # Pulisci i dati temporanei
         context.user_data.pop('adding_wine', None)

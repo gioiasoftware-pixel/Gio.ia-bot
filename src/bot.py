@@ -760,6 +760,30 @@ async def callback_handler(update, context):
         except Exception as e:
             logger.error(f"Errore gestione callback movimento: {e}", exc_info=True)
             await query.answer("❌ Errore durante il processamento.", show_alert=True)
+            
+            # Notifica admin per errore callback movimento
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                telegram_id = update.effective_user.id if update.effective_user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "callback_movement_error",
+                            "error_message": str(e),
+                            "error_code": "CALLBACK_MOVEMENT_ERROR",
+                            "component": "telegram-ai-bot",
+                            "callback_data": query.data if query.data else None,
+                            "user_visible_error": "❌ Errore durante il processamento."
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return
     
     query.answer()
@@ -800,7 +824,29 @@ async def callback_handler(update, context):
                 await query.edit_message_text("➕ **Aggiungi dati**\n\nSeleziona il campo da compilare:", reply_markup=keyboard)
             return
         except Exception as e:
-            logger.error(f"Errore show_fill callback: {e}")
+            logger.error(f"Errore show_fill callback: {e}", exc_info=True)
+            
+            # Notifica admin per errore callback
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                telegram_id = update.effective_user.id if update.effective_user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "callback_show_fill_error",
+                            "error_message": str(e),
+                            "error_code": "CALLBACK_SHOW_FILL_ERROR",
+                            "component": "telegram-ai-bot",
+                            "callback_data": query.data if query.data else None
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
     
     if query.data and query.data.startswith("show_edit:"):
         try:
@@ -821,7 +867,29 @@ async def callback_handler(update, context):
                 await query.edit_message_text("📝 **Modifica dati**\n\nSeleziona il campo da modificare:", reply_markup=keyboard)
             return
         except Exception as e:
-            logger.error(f"Errore show_edit callback: {e}")
+            logger.error(f"Errore show_edit callback: {e}", exc_info=True)
+            
+            # Notifica admin per errore callback
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                telegram_id = update.effective_user.id if update.effective_user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "callback_show_edit_error",
+                            "error_message": str(e),
+                            "error_code": "CALLBACK_SHOW_EDIT_ERROR",
+                            "component": "telegram-ai-bot",
+                            "callback_data": query.data if query.data else None
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
     
     if query.data and query.data.startswith("back_main:"):
         try:
@@ -849,7 +917,29 @@ async def callback_handler(update, context):
                 await query.edit_message_text(original_text, reply_markup=keyboard, parse_mode='Markdown')
             return
         except Exception as e:
-            logger.error(f"Errore back_main callback: {e}")
+            logger.error(f"Errore back_main callback: {e}", exc_info=True)
+            
+            # Notifica admin per errore callback
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                telegram_id = update.effective_user.id if update.effective_user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "callback_back_main_error",
+                            "error_message": str(e),
+                            "error_code": "CALLBACK_BACK_MAIN_ERROR",
+                            "component": "telegram-ai-bot",
+                            "callback_data": query.data if query.data else None
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
     
     # Riepilogo movimenti per periodo
     if query.data and query.data.startswith("movsum:"):
@@ -906,6 +996,28 @@ async def callback_handler(update, context):
         except Exception as e:
             logger.error(f"Errore gestione callback wine_info: {e}", exc_info=True)
             await query.answer("❌ Errore durante il caricamento.", show_alert=True)
+            
+            # Notifica admin per errore callback
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                await enqueue_admin_notification(
+                    event_type="error",
+                    telegram_id=telegram_id,
+                    payload={
+                        "error_type": "callback_wine_info_error",
+                        "error_message": str(e),
+                        "error_code": "CALLBACK_WINE_INFO_ERROR",
+                        "component": "telegram-ai-bot",
+                        "callback_data": query.data if query.data else None,
+                        "user_visible_error": "❌ Errore durante il caricamento."
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return
     
     # Gestisci callback inventario - ASYNC

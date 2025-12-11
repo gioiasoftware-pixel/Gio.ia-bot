@@ -589,6 +589,32 @@ class NewOnboardingManager:
                     f"Dettagli: {error_msg[:200]}...\n\n"
                     f"Riprova più tardi o contatta il supporto."
                 )
+                
+                # Notifica admin per errore processor durante onboarding
+                try:
+                    from .admin_notifications import enqueue_admin_notification
+                    from .structured_logging import get_correlation_id
+                    
+                    user = update.effective_user
+                    telegram_id = user.id if user else None
+                    if telegram_id:
+                        await enqueue_admin_notification(
+                            event_type="error",
+                            telegram_id=telegram_id,
+                            payload={
+                                "error_type": "onboarding_processor_error",
+                                "error_message": error_msg,
+                                "error_code": "ONBOARDING_PROCESSOR_ERROR",
+                                "component": "telegram-ai-bot",
+                                "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
+                                "user_visible_error": f"⚠️ Errore elaborazione inventario: {error_msg[:200]}",
+                                "business_name": business_name,
+                                "processor_error": True
+                            },
+                            correlation_id=get_correlation_id(context)
+                        )
+                except Exception as notif_error:
+                    logger.warning(f"Errore invio notifica admin: {notif_error}")
                         
         except Exception as e:
             logger.error(f"Errore elaborazione inventario: {e}")

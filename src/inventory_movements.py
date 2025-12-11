@@ -380,8 +380,34 @@ class InventoryMovementManager:
                 return True
             
         except Exception as e:
-            logger.error(f"Errore processamento rifornimento: {e}")
+            logger.error(f"Errore processamento rifornimento: {e}", exc_info=True)
             await update.message.reply_text("❌ Errore durante il processamento. Riprova.")
+            
+            # Notifica admin per errore movimento bot
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                user = update.effective_user
+                telegram_id = user.id if user else None
+                if telegram_id:
+                    await enqueue_admin_notification(
+                        event_type="error",
+                        telegram_id=telegram_id,
+                        payload={
+                            "error_type": "movement_processing_error",
+                            "error_message": str(e),
+                            "error_code": "MOVEMENT_PROCESSING_ERROR",
+                            "component": "telegram-ai-bot",
+                            "movement_type": "rifornimento",
+                            "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
+                            "user_visible_error": "❌ Errore durante il processamento. Riprova."
+                        },
+                        correlation_id=get_correlation_id(context)
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return True
     
     async def _poll_movement_job_and_notify(
@@ -754,9 +780,34 @@ class InventoryMovementManager:
             return True
             
         except Exception as e:
-            logger.error(f"Errore processamento movimento da callback: {e}")
+            logger.error(f"Errore processamento movimento da callback: {e}", exc_info=True)
             if update.callback_query:
                 await update.callback_query.answer("❌ Errore durante il processamento.", show_alert=True)
+            
+            # Notifica admin per errore movimento callback
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                await enqueue_admin_notification(
+                    event_type="error",
+                    telegram_id=telegram_id,
+                    payload={
+                        "error_type": "movement_callback_exception",
+                        "error_message": str(e),
+                        "error_code": "MOVEMENT_CALLBACK_EXCEPTION",
+                        "component": "telegram-ai-bot",
+                        "movement_type": movement_type,
+                        "wine_id": wine_id,
+                        "quantity": quantity,
+                        "callback_data": update.callback_query.data if update.callback_query and update.callback_query.data else None,
+                        "user_visible_error": "❌ Errore durante il processamento."
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return True
     
     async def get_daily_summary(self, telegram_id: int, date: datetime = None) -> Dict[str, Any]:
