@@ -700,6 +700,27 @@ async def handle_photo_with_onboarding(update, context):
 async def callback_handler(update, context):
     """Gestisce le callback query"""
     query = update.callback_query
+    
+    # Gestisci callback movimenti (consumo/rifornimento) PRIMA di answer()
+    if query.data and (query.data.startswith("movimento_consumo:") or query.data.startswith("movimento_rifornimento:")):
+        try:
+            # Estrai dati dal callback
+            parts = query.data.split(":")
+            movement_type = "consumo" if parts[0] == "movimento_consumo" else "rifornimento"
+            wine_id = int(parts[1])
+            quantity = int(parts[2])
+            
+            # Gestisci movimento tramite inventory_movement_manager
+            handled = await inventory_movement_manager._handle_movement_callback(
+                update, context, wine_id, quantity, movement_type
+            )
+            if handled:
+                return
+        except Exception as e:
+            logger.error(f"Errore gestione callback movimento: {e}", exc_info=True)
+            await query.answer("❌ Errore durante il processamento.", show_alert=True)
+            return
+    
     query.answer()
     
     # Gestisci callback onboarding (se necessario)
