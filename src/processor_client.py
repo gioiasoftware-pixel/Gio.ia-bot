@@ -1,43 +1,206 @@
 """
-Client per comunicare con il processor microservice
+Client per comunicare con il microservizio Gioia Processor.
+
+Gestisce tutte le chiamate HTTP al processor per:
+- Health check
+- Creazione tabelle utente
+- Elaborazione inventario
+- Movimenti inventario
+- Status job
 """
 import logging
 import aiohttp
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Optional, Dict, Any
 from .config import PROCESSOR_URL
 
 logger = logging.getLogger(__name__)
 
 
 class ProcessorClient:
-    """Client HTTP per processor microservice"""
+    """Client per comunicare con il microservizio processor."""
     
     def __init__(self, base_url: str = None):
-        self.base_url = base_url or PROCESSOR_URL
-        if not self.base_url:
-            self.base_url = "https://gioia-processor-production.up.railway.app"
-        # Rimuovi trailing slash
-        self.base_url = self.base_url.rstrip('/')
+        self.base_url = base_url or PROCESSOR_URL.rstrip('/')
+        logger.info(f"[PROCESSOR_CLIENT] Inizializzato con URL: {self.base_url}")
+    
+    async def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Esegue una richiesta HTTP al processor."""
+        url = f"{self.base_url}{endpoint}"
+        
+        try:
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, **kwargs) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore {method} {endpoint}: HTTP {e.status} - {e.message}")
+            if e.status == 404:
+                return {"status": "error", "error": f"Endpoint non trovato: {endpoint}"}
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
+        except aiohttp.ClientError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore connessione {method} {endpoint}: {e}")
+            return {"status": "error", "error": f"Errore connessione: {str(e)}"}
+        except Exception as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore inaspettato {method} {endpoint}: {e}", exc_info=True)
+            return {"status": "error", "error": f"Errore inaspettato: {str(e)}"}
     
     async def health_check(self) -> Dict[str, Any]:
-        """Verifica stato processor"""
+        """Verifica stato del processor."""
+        return await self._make_request("GET", "/health")
+    
+    async def create_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
+        """
+        Crea tabelle utente nel processor.
+        
+        Args:
+            telegram_id: ID Telegram dell'utente
+            business_name: Nome del locale
+            
+        Returns:
+            Dict con status e dettagli tabelle create
+        """
+        logger.info(f"[PROCESSOR_CLIENT] Chiamata create_tables: telegram_id={telegram_id}, business_name={business_name}")
+        
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.base_url}/health", timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return {
-                            "status": "unhealthy",
-                            "error": f"HTTP {response.status}"
-                        }
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{self.base_url}/create-tables",
+                    data={
+                        "telegram_id": telegram_id,
+                        "business_name": business_name
+                    }
+                ) as response:
+                    response.raise_for_status()
+                    result = await response.json()
+                    logger.info(f"[PROCESSOR_CLIENT] create_tables successo: {result}")
+                    return result
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore create_tables: HTTP {e.status} - {e.message}")
+            if e.status == 404:
+                return {"status": "error", "error": f"Endpoint /create-tables non trovato (404)"}
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
+        except aiohttp.ClientError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore connessione create_tables: {e}")
+            return {"status": "error", "error": f"Errore connessione: {str(e)}"}
         except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore health_check: {e}")
-            return {
-                "status": "unreachable",
-                "error": str(e)
-            }
+            logger.error(f"[PROCESSOR_CLIENT] Errore inaspettato create_tables: {e}", exc_info=True)
+            return {"status": "error", "error": f"Errore inaspettato: {str(e)}"}
+    
+    async def process_inventory(
+        self,
+        telegram_id: int,
+        business_name: str,
+        file_type: str,
+        file_content: bytes,
+        file_name: str,
+        client_msg_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        mode: str = "add"
+    ) -> Dict[str, Any]:
+        """
+        Invia file inventario al processor per elaborazione.
+        
+        Args:
+            telegram_id: ID Telegram dell'utente
+            business_name: Nome del locale
+            file_type: Tipo file (csv, excel, photo, pdf)
+            file_content: Contenuto file in bytes
+            file_name: Nome file
+            client_msg_id: ID messaggio client per idempotenza
+            correlation_id: ID correlazione per logging
+            mode: Modalità (add o replace)
+            
+        Returns:
+            Dict con job_id e status
+        """
+        logger.info(
+            f"[PROCESSOR_CLIENT] process_inventory: telegram_id={telegram_id}, "
+            f"business_name={business_name}, file_type={file_type}, file_name={file_name}, "
+            f"file_size={len(file_content)} bytes"
+        )
+        
+        files = {"file": (file_name, file_content)}
+        data = {
+            "telegram_id": telegram_id,
+            "business_name": business_name,
+            "file_type": file_type,
+            "mode": mode
+        }
+        if client_msg_id:
+            data["client_msg_id"] = client_msg_id
+        if correlation_id:
+            data["correlation_id"] = correlation_id
+        
+        try:
+            timeout = aiohttp.ClientTimeout(total=60.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                form_data = aiohttp.FormData()
+                form_data.add_field('file', file_content, filename=file_name)
+                for key, value in data.items():
+                    form_data.add_field(key, str(value))
+                
+                async with session.post(
+                    f"{self.base_url}/process-inventory",
+                    data=form_data
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore process_inventory: HTTP {e.status} - {e.message}")
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
+        except Exception as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore process_inventory: {e}", exc_info=True)
+            return {"status": "error", "error": str(e)}
+    
+    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+        """Ottiene stato di un job di elaborazione."""
+        return await self._make_request("GET", f"/status/{job_id}")
+    
+    async def wait_for_job_completion(
+        self,
+        job_id: str,
+        max_wait_seconds: int = 300,
+        poll_interval: float = 2.0
+    ) -> Dict[str, Any]:
+        """
+        Attende completamento di un job con polling.
+        
+        Args:
+            job_id: ID del job
+            max_wait_seconds: Tempo massimo di attesa
+            poll_interval: Intervallo tra polling (secondi)
+            
+        Returns:
+            Dict con risultato job o status
+        """
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_seconds:
+            status = await self.get_job_status(job_id)
+            
+            if status.get('status') == 'completed':
+                return status
+            elif status.get('status') == 'error' or status.get('status') == 'failed':
+                return status
+            
+            await asyncio.sleep(poll_interval)
+        
+        # Timeout
+        return {
+            "status": "timeout",
+            "job_id": job_id,
+            "error": f"Timeout dopo {max_wait_seconds} secondi"
+        }
     
     async def process_movement(
         self,
@@ -47,323 +210,34 @@ class ProcessorClient:
         movement_type: str,
         quantity: int
     ) -> Dict[str, Any]:
-        """Processa movimento inventario (consumo/rifornimento)"""
+        """Processa un movimento inventario (consumo o rifornimento)."""
         logger.info(
-            f"[PROCESSOR_CLIENT] process_movement called | "
-            f"telegram_id={telegram_id}, business={business_name}, "
-            f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity}"
+            f"[PROCESSOR_CLIENT] process_movement: telegram_id={telegram_id}, "
+            f"business_name={business_name}, wine_name={wine_name}, "
+            f"movement_type={movement_type}, quantity={quantity}"
         )
+        
         try:
-            data = aiohttp.FormData()
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            data.add_field('wine_name', wine_name)
-            data.add_field('movement_type', movement_type)
-            data.add_field('quantity', str(quantity))
-            
-            logger.debug(f"[PROCESSOR_CLIENT] Sending POST to {self.base_url}/process-movement")
-            
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     f"{self.base_url}/process-movement",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    response_text = await response.text()
-                    logger.debug(
-                        f"[PROCESSOR_CLIENT] Response status={response.status} | "
-                        f"telegram_id={telegram_id}, wine_name='{wine_name}' | "
-                        f"response_preview={response_text[:200]}"
-                    )
-                    
-                    if response.status == 200:
-                        try:
-                            result = await response.json()
-                            logger.info(
-                                f"[PROCESSOR_CLIENT] process_movement success | "
-                                f"telegram_id={telegram_id}, wine_name='{wine_name}', "
-                                f"job_id={result.get('job_id')}, status={result.get('status')}"
-                            )
-                            return result
-                        except Exception as json_error:
-                            logger.error(
-                                f"[PROCESSOR_CLIENT] Failed to parse JSON response | "
-                                f"telegram_id={telegram_id}, wine_name='{wine_name}' | "
-                                f"response_text={response_text[:500]} | error={json_error}",
-                                exc_info=True
-                            )
-                            return {
-                                "status": "error",
-                                "error": f"Failed to parse response: {str(json_error)}",
-                                "error_message": f"Failed to parse response: {str(json_error)}"
-                            }
-                    else:
-                        logger.error(
-                            f"[PROCESSOR_CLIENT] HTTP error {response.status} | "
-                            f"telegram_id={telegram_id}, business={business_name}, "
-                            f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
-                            f"response_text={response_text[:500]}"
-                        )
-                        return {
-                            "status": "error",
-                            "error": f"HTTP {response.status}: {response_text[:200]}",
-                            "error_message": f"HTTP {response.status}: {response_text[:200]}"
-                        }
-        except asyncio.TimeoutError as te:
-            logger.error(
-                f"[PROCESSOR_CLIENT] Timeout calling processor | "
-                f"telegram_id={telegram_id}, business={business_name}, "
-                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity}",
-                exc_info=True
-            )
-            return {
-                "status": "error",
-                "error": f"Timeout calling processor: {str(te)}",
-                "error_message": f"Timeout calling processor: {str(te)}"
-            }
-        except aiohttp.ClientError as ce:
-            logger.error(
-                f"[PROCESSOR_CLIENT] HTTP client error | "
-                f"telegram_id={telegram_id}, business={business_name}, "
-                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
-                f"error={str(ce)}",
-                exc_info=True
-            )
-            return {
-                "status": "error",
-                "error": f"HTTP client error: {str(ce)}",
-                "error_message": f"HTTP client error: {str(ce)}"
-            }
-        except Exception as e:
-            logger.error(
-                f"[PROCESSOR_CLIENT] Unexpected error in process_movement | "
-                f"telegram_id={telegram_id}, business={business_name}, "
-                f"wine_name='{wine_name}', movement_type={movement_type}, quantity={quantity} | "
-                f"error={str(e)}",
-                exc_info=True
-            )
-            return {
-                "status": "error",
-                "error": f"Unexpected error: {str(e)}",
-                "error_message": f"Unexpected error: {str(e)}"
-            }
-    
-    async def process_inventory(
-        self,
-        telegram_id: int,
-        business_name: str,
-        file_type: str,
-        file_content: bytes,
-        file_name: str,
-        client_msg_id: str = None,
-        correlation_id: str = None,
-        mode: str = "add",
-        dry_run: bool = False
-    ) -> Dict[str, Any]:
-        """Processa file inventario"""
-        try:
-            data = aiohttp.FormData()
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            data.add_field('file_type', file_type)
-            data.add_field('mode', mode)
-            data.add_field('dry_run', str(dry_run).lower())
-            
-            if client_msg_id:
-                data.add_field('client_msg_id', client_msg_id)
-            if correlation_id:
-                data.add_field('correlation_id', correlation_id)
-            
-            # Aggiungi file
-            data.add_field('file', file_content, filename=file_name, content_type='application/octet-stream')
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/process-inventory",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"[PROCESSOR_CLIENT] Errore process_inventory: HTTP {response.status} - {error_text}")
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
-                        }
-        except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore process_inventory: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def create_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
-        """Crea tabelle utente nel processor"""
-        try:
-            data = aiohttp.FormData()
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/create-tables",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"[PROCESSOR_CLIENT] Errore create_tables: HTTP {response.status} - {error_text}")
-                        return {
-                            "status": "error",
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
-                        }
-        except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore create_tables: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    async def delete_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
-        """Cancella tabelle utente nel processor"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.delete(
-                    f"{self.base_url}/tables/{telegram_id}",
-                    params={"business_name": business_name},
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"[PROCESSOR_CLIENT] Errore delete_tables: HTTP {response.status} - {error_text}")
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
-                        }
-        except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore delete_tables: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """Ottieni stato job"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.base_url}/status/{job_id}",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        return {
-                            "status": "unknown",
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
-                        }
-        except Exception as e:
-            logger.error(f"[PROCESSOR_CLIENT] Errore get_job_status: {e}")
-            return {
-                "status": "unknown",
-                "error": str(e)
-            }
-    
-    async def wait_for_job_completion(
-        self,
-        job_id: str,
-        max_wait_seconds: int = 3600,
-        poll_interval: int = 10
-    ) -> Dict[str, Any]:
-        """
-        Attendi completamento job con polling intelligente e gestione errori esplicita.
-        
-        Returns:
-            Dict con status: 'completed', 'failed', 'error', 'timeout'
-        """
-        start_time = asyncio.get_event_loop().time()
-        consecutive_errors = 0
-        max_consecutive_errors = 5
-        
-        while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
-            
-            # Timeout check
-            if elapsed > max_wait_seconds:
-                return {
-                    "status": "timeout",
-                    "error": f"Job {job_id} non completato entro {max_wait_seconds}s"
-                }
-            
-            try:
-                status = await self.get_job_status(job_id)
-                consecutive_errors = 0  # Reset error counter su successo
-                
-                # Gestione esplicita di tutti gli stati
-                job_status = status.get("status")
-                
-                if job_status == "completed":
-                    # Job completato con successo
-                    return status
-                    
-                elif job_status == "failed":
-                    # Job fallito - ritorna immediatamente con errori
-                    return {
-                        "status": "failed",
-                        "error": status.get("error", "Job failed"),
-                        "result": status.get("result", {}),
-                        "job_id": job_id
+                    data={
+                        "telegram_id": telegram_id,
+                        "business_name": business_name,
+                        "wine_name": wine_name,
+                        "movement_type": movement_type,
+                        "quantity": quantity
                     }
-                    
-                elif job_status == "processing" or job_status == "pending":
-                    # Job ancora in elaborazione
-                    await asyncio.sleep(poll_interval)
-                    
-                elif job_status == "unknown":
-                    # Stato sconosciuto (probabilmente errore get_job_status)
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        return {
-                            "status": "error",
-                            "error": f"Troppi errori consecutivi durante polling: {status.get('error', 'Unknown error')}",
-                            "job_id": job_id
-                        }
-                    await asyncio.sleep(poll_interval)
-                    
-                else:
-                    # Stato non riconosciuto
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        return {
-                            "status": "error",
-                            "error": f"Stato job non riconosciuto: {job_status}",
-                            "job_id": job_id
-                        }
-                    await asyncio.sleep(poll_interval)
-                    
-            except Exception as e:
-                # Errore durante get_job_status
-                consecutive_errors += 1
-                logger.error(
-                    f"[PROCESSOR_CLIENT] Errore durante polling job {job_id}: {e}",
-                    exc_info=True
-                )
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    return {
-                        "status": "error",
-                        "error": f"Errore durante polling: {str(e)}",
-                        "job_id": job_id
-                    }
-                
-                await asyncio.sleep(poll_interval)
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore process_movement: HTTP {e.status} - {e.message}")
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
+        except Exception as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore process_movement: {e}", exc_info=True)
+            return {"status": "error", "error": str(e)}
     
     async def update_wine_field(
         self,
@@ -373,40 +247,54 @@ class ProcessorClient:
         field: str,
         value: str
     ) -> Dict[str, Any]:
-        """Aggiorna campo vino"""
+        """Aggiorna un campo di un vino."""
+        logger.info(
+            f"[PROCESSOR_CLIENT] update_wine_field: telegram_id={telegram_id}, "
+            f"wine_id={wine_id}, field={field}"
+        )
+        
         try:
-            data = aiohttp.FormData()
-            data.add_field('telegram_id', str(telegram_id))
-            data.add_field('business_name', business_name)
-            data.add_field('wine_id', str(wine_id))
-            data.add_field('field', field)
-            data.add_field('value', value)
-            
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     f"{self.base_url}/update-wine-field",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    data={
+                        "telegram_id": telegram_id,
+                        "business_name": business_name,
+                        "wine_id": wine_id,
+                        "field": field,
+                        "value": value
+                    }
                 ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"[PROCESSOR_CLIENT] Errore update_wine_field: HTTP {response.status} - {error_text}")
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}: {error_text[:200]}"
-                        }
+                    response.raise_for_status()
+                    return await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore update_wine_field: HTTP {e.status} - {e.message}")
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
         except Exception as e:
             logger.error(f"[PROCESSOR_CLIENT] Errore update_wine_field: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
+    
+    async def delete_tables(self, telegram_id: int, business_name: str) -> Dict[str, Any]:
+        """Elimina tabelle utente."""
+        logger.info(f"[PROCESSOR_CLIENT] delete_tables: telegram_id={telegram_id}, business_name={business_name}")
+        
+        try:
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.delete(
+                    f"{self.base_url}/tables/{telegram_id}",
+                    params={"business_name": business_name}
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore delete_tables: HTTP {e.status} - {e.message}")
+            return {"status": "error", "error": f"HTTP {e.status}: {e.message[:200]}"}
+        except Exception as e:
+            logger.error(f"[PROCESSOR_CLIENT] Errore delete_tables: {e}", exc_info=True)
+            return {"status": "error", "error": str(e)}
 
 
-# Istanza globale
+# Istanza globale del client
 processor_client = ProcessorClient()
-
-
-
