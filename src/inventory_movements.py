@@ -284,6 +284,31 @@ class InventoryMovementManager:
                 f"Errore: {str(e)[:200]}\n\n"
                 f"Riprova più tardi."
             )
+            
+            # Notifica admin per errore movimento consumo
+            try:
+                from .admin_notifications import enqueue_admin_notification
+                from .structured_logging import get_correlation_id
+                
+                await enqueue_admin_notification(
+                    event_type="error",
+                    telegram_id=telegram_id,
+                    payload={
+                        "error_type": "movement_consumo_exception",
+                        "error_message": str(e),
+                        "error_code": "MOVEMENT_CONSUMO_EXCEPTION",
+                        "component": "telegram-ai-bot",
+                        "movement_type": "consumo",
+                        "wine_name": wine_name,
+                        "quantity": quantity,
+                        "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
+                        "user_visible_error": f"❌ Errore durante il processamento: {str(e)[:200]}"
+                    },
+                    correlation_id=get_correlation_id(context)
+                )
+            except Exception as notif_error:
+                logger.warning(f"Errore invio notifica admin: {notif_error}")
+            
             return True
     
     async def _process_rifornimento(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
