@@ -363,6 +363,20 @@ async def chat_handler(update, context):
         if await inventory_manager.handle_wine_data(update, context):
             return
         
+        # Rileva richieste di aggiungere vino e reindirizza a /aggiungi
+        from .ai import _is_add_wine_request
+        if _is_add_wine_request(user_text):
+            logger.info(f"[BOT] Rilevata richiesta di aggiungere vino, reindirizzo a /aggiungi")
+            await inventory_manager.start_add_wine(update, context)
+            return
+        
+        # Rileva richieste di lista inventario e reindirizza a /view
+        from .ai import _is_inventory_list_request
+        if _is_inventory_list_request(user_text):
+            logger.info(f"[BOT] Rilevata richiesta lista inventario, reindirizzo a /view")
+            await view_cmd(update, context)
+            return
+        
         await update.message.reply_text("💭 Sto pensando...")
         
         # Chiama AI con contesto utente (async)

@@ -90,11 +90,46 @@ def _is_inventory_list_request(prompt: str) -> bool:
     
     patterns = [
         r"\bche\s+vini\s+ho\b",
+        r"\bquanti\s+vini\s+ho\b",
+        r"\bquante\s+vini\s+ho\b",
+        r"\bquanti\s+vini\s+hai\b",
+        r"\bquante\s+vini\s+hai\b",
+        r"\bche\s+vini\s+hai\b",
+        r"\bquali\s+vini\s+ho\b",
+        r"\bquali\s+vini\s+hai\b",
         r"\belenco\s+vini\b",
         r"\blista\s+vini\b",
         r"\bmostra\s+inventario\b",
         r"\bvedi\s+inventario\b",
+        r"\bmostra\s+i\s+vini\b",
+        r"\bmostrami\s+i\s+vini\b",
+        r"\bmostrami\s+inventario\b",
+        r"\bmostra\s+tutti\s+i\s+vini\b",
+        r"\binventario\s+completo\b",
         r"\binventario\b",
+    ]
+    return any(re.search(pt, p) for pt in patterns)
+
+
+def _is_add_wine_request(prompt: str) -> bool:
+    """
+    Riconosce richieste di aggiungere un vino.
+    Pattern: aggiungi vino, aggiungere vino, nuovo vino, inserisci vino, ecc.
+    """
+    p = prompt.lower().strip()
+    
+    patterns = [
+        r"\baggiungi\s+(?:un\s+)?vino\b",
+        r"\baggiungere\s+(?:un\s+)?vino\b",
+        r"\binserisci\s+(?:un\s+)?vino\b",
+        r"\binserire\s+(?:un\s+)?vino\b",
+        r"\bnuovo\s+vino\b",
+        r"\bregistra\s+(?:un\s+)?vino\b",
+        r"\bregistrare\s+(?:un\s+)?vino\b",
+        r"\bcrea\s+(?:un\s+)?vino\b",
+        r"\bcreare\s+(?:un\s+)?vino\b",
+        r"\badd\s+wine\b",  # Inglese
+        r"\bnew\s+wine\b",  # Inglese
     ]
     return any(re.search(pt, p) for pt in patterns)
 
