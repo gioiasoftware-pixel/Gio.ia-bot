@@ -212,6 +212,8 @@ class InventoryMovementManager:
                 for qty, wine in multiple_consumi
             ]
             context.user_data['original_message'] = original_message
+            context.user_data['current_movement_index'] = 0  # Inizia dal primo movimento
+            context.user_data['completed_movements'] = []  # Traccia i movimenti completati per il sommario
             # Processa il primo movimento (gli altri verranno processati dopo la selezione)
             return await self._process_consumo(update, context, telegram_id, multiple_consumi[0][1], multiple_consumi[0][0])
         
@@ -223,6 +225,8 @@ class InventoryMovementManager:
                 for qty, wine in multiple_rifornimenti
             ]
             context.user_data['original_message'] = original_message
+            context.user_data['current_movement_index'] = 0  # Inizia dal primo movimento
+            context.user_data['completed_movements'] = []  # Traccia i movimenti completati per il sommario
             # Processa il primo movimento (gli altri verranno processati dopo la selezione)
             return await self._process_rifornimento(update, context, telegram_id, multiple_rifornimenti[0][1], multiple_rifornimenti[0][0])
         
@@ -835,6 +839,44 @@ class InventoryMovementManager:
         
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
+    async def _show_final_summary(self, message, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Mostra un sommario finale di tutti i movimenti processati.
+        """
+        completed_movements = context.user_data.get('completed_movements', [])
+        if not completed_movements:
+            return
+        
+        # Raggruppa per tipo
+        consumi = [m for m in completed_movements if m['type'] == 'consumo']
+        rifornimenti = [m for m in completed_movements if m['type'] == 'rifornimento']
+        
+        summary_lines = ["📊 **Sommario Movimenti**\n"]
+        
+        if rifornimenti:
+            summary_lines.append(f"📈 **Rifornimenti ({len(rifornimenti)}):**")
+            for mov in rifornimenti:
+                summary_lines.append(
+                    f"  • {mov['wine_name']}: +{mov['quantity']} bottiglie "
+                    f"({mov.get('quantity_before', '?')} → {mov.get('quantity_after', '?')})"
+                )
+            summary_lines.append("")
+        
+        if consumi:
+            summary_lines.append(f"📉 **Consumi ({len(consumi)}):**")
+            for mov in consumi:
+                summary_lines.append(
+                    f"  • {mov['wine_name']}: -{mov['quantity']} bottiglie "
+                    f"({mov.get('quantity_before', '?')} → {mov.get('quantity_after', '?')})"
+                )
+            summary_lines.append("")
+        
+        total_movements = len(completed_movements)
+        summary_lines.append(f"✅ **Totale:** {total_movements} movimenti registrati")
+        
+        summary_text = "\n".join(summary_lines)
+        await message.reply_text(summary_text, parse_mode='Markdown')
+    
     async def _process_next_pending_movement(self, message, context: ContextTypes.DEFAULT_TYPE,
                                             telegram_id: int, business_name: str) -> None:
         """
@@ -847,14 +889,25 @@ class InventoryMovementManager:
         if not pending_movements:
             # Tutti i movimenti sono stati processati
             logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
+            
+            # Mostra sommario finale
+            await self._show_final_summary(message, context)
+            
+            # Pulisci il context
             context.user_data.pop('pending_movements', None)
             context.user_data.pop('original_message', None)
+            context.user_data.pop('current_movement_index', None)
+            context.user_data.pop('completed_movements', None)
             return
         
+        # Prendi il primo movimento dalla lista (quelli già processati sono stati rimossi)
         next_movement = pending_movements[0]
+        # Aggiorna l'indice corrente
+        context.user_data['current_movement_index'] = 0
+        
         logger.info(
-            f"[MOVEMENT] Processando movimento multiplo pendente: {next_movement['type']} "
-            f"{next_movement['quantity']} {next_movement['wine_name']}"
+            f"[MOVEMENT] Processando movimento multiplo pendente ({len(pending_movements)} rimanenti): "
+            f"{next_movement['type']} {next_movement['quantity']} {next_movement['wine_name']}"
         )
         
         # Cerca i vini corrispondenti
@@ -920,22 +973,52 @@ class InventoryMovementManager:
                     )
                 await message.reply_text(msg, parse_mode='Markdown')
                 
+                # Aggiungi il movimento completato alla lista per il sommario
+                completed_movements = context.user_data.get('completed_movements', [])
+                completed_movements.append({
+                    'type': next_movement['type'],
+                    'wine_name': result.get('wine_name', exact_wine_name),
+                    'quantity': next_movement['quantity'],
+                    'quantity_before': result.get('quantity_before'),
+                    'quantity_after': result.get('quantity_after')
+                })
+                context.user_data['completed_movements'] = completed_movements
+                
                 # Rimuovi questo movimento e continua con il prossimo
                 pending_movements.pop(0)
                 context.user_data['pending_movements'] = pending_movements
+                context.user_data.pop('current_movement_index', None)
                 
                 # Processa ricorsivamente il prossimo movimento
                 if pending_movements:
                     await self._process_next_pending_movement(message, context, telegram_id, business_name)
                 else:
-                    # Tutti i movimenti completati
+                    # Tutti i movimenti completati - mostra sommario finale
+                    await self._show_final_summary(message, context)
                     context.user_data.pop('pending_movements', None)
                     context.user_data.pop('original_message', None)
+                    context.user_data.pop('current_movement_index', None)
+                    context.user_data.pop('completed_movements', None)
             else:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 await message.reply_text(
                     f"❌ **Errore durante il processamento**\n\n{error_msg[:200]}"
                 )
+                # Rimuovi questo movimento dalla lista anche se fallito
+                pending_movements.pop(0)
+                context.user_data['pending_movements'] = pending_movements
+                context.user_data.pop('current_movement_index', None)
+                
+                # Continua con il prossimo movimento se ce ne sono
+                if pending_movements:
+                    await self._process_next_pending_movement(message, context, telegram_id, business_name)
+                else:
+                    # Tutti i movimenti sono stati processati (anche se alcuni falliti) - mostra sommario finale
+                    await self._show_final_summary(message, context)
+                    context.user_data.pop('pending_movements', None)
+                    context.user_data.pop('original_message', None)
+                    context.user_data.pop('current_movement_index', None)
+                    context.user_data.pop('completed_movements', None)
         else:
             # Nessuna corrispondenza
             await message.reply_text(
@@ -945,8 +1028,15 @@ class InventoryMovementManager:
             # Rimuovi questo movimento e continua con il prossimo
             pending_movements.pop(0)
             context.user_data['pending_movements'] = pending_movements
+            context.user_data.pop('current_movement_index', None)
             if pending_movements:
                 await self._process_next_pending_movement(message, context, telegram_id, business_name)
+            else:
+                # Tutti i movimenti completati
+                logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
+                context.user_data.pop('pending_movements', None)
+                context.user_data.pop('original_message', None)
+                context.user_data.pop('current_movement_index', None)
     
     async def process_movement_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
                                              wine_id: int, movement_type: str, quantity: int) -> bool:
@@ -988,6 +1078,45 @@ class InventoryMovementManager:
             # Conferma selezione
             await query.answer(f"🔄 Elaborazione {movement_type} per {selected_wine.name}...")
             
+            # Controlla se ci sono movimenti multipli pendenti PRIMA di processare
+            pending_movements = context.user_data.get('pending_movements', [])
+            current_movement_index = context.user_data.get('current_movement_index', 0)
+            
+            logger.info(
+                f"[MOVEMENT] Callback ricevuto: {movement_type} {quantity}, "
+                f"movimenti pendenti: {len(pending_movements)}, indice corrente: {current_movement_index}"
+            )
+            
+            # Se ci sono movimenti pendenti, identifica quale movimento stiamo processando
+            if pending_movements:
+                # Cerca il movimento corrispondente nella lista (per tipo e quantità)
+                found_index = None
+                for idx, mov in enumerate(pending_movements):
+                    if mov['type'] == movement_type and mov['quantity'] == quantity:
+                        found_index = idx
+                        break
+                
+                if found_index is not None:
+                    current_movement_index = found_index
+                    context.user_data['current_movement_index'] = current_movement_index
+                    logger.info(
+                        f"[MOVEMENT] Movimento identificato all'indice {current_movement_index}: "
+                        f"{pending_movements[current_movement_index]['wine_name']}"
+                    )
+                else:
+                    logger.warning(
+                        f"[MOVEMENT] Movimento callback non trovato nella lista pendenti. "
+                        f"Callback: {movement_type} {quantity}, Pendenti: {pending_movements}"
+                    )
+                    # Se non trovato, usa l'indice corrente se valido
+                    if current_movement_index < len(pending_movements):
+                        logger.info(f"[MOVEMENT] Usando indice corrente {current_movement_index}")
+                    else:
+                        # Se l'indice non è valido, usa il primo movimento
+                        current_movement_index = 0
+                        context.user_data['current_movement_index'] = 0
+                        logger.warning(f"[MOVEMENT] Indice non valido, reset a 0")
+            
             # Invia movimento al processor
             result = await processor_client.process_movement(
                 telegram_id=telegram_id,
@@ -1017,25 +1146,44 @@ class InventoryMovementManager:
                 
                 await query.edit_message_text(success_message, parse_mode='Markdown')
                 
-                # Controlla se ci sono movimenti multipli pendenti
-                pending_movements = context.user_data.get('pending_movements', [])
+                # Aggiungi il movimento completato alla lista per il sommario
+                completed_movements = context.user_data.get('completed_movements', [])
+                completed_movements.append({
+                    'type': movement_type,
+                    'wine_name': result.get('wine_name', selected_wine.name),
+                    'quantity': quantity,
+                    'quantity_before': result.get('quantity_before'),
+                    'quantity_after': result.get('quantity_after')
+                })
+                context.user_data['completed_movements'] = completed_movements
+                
+                # Se ci sono movimenti multipli pendenti, rimuovi quello appena processato e continua
                 if pending_movements:
                     # Rimuovi il movimento appena processato dalla lista
-                    # Il primo movimento nella lista è quello appena processato
-                    if len(pending_movements) > 0:
-                        pending_movements.pop(0)
+                    if current_movement_index < len(pending_movements):
+                        pending_movements.pop(current_movement_index)
                         context.user_data['pending_movements'] = pending_movements
+                        # Reset l'indice corrente
+                        context.user_data.pop('current_movement_index', None)
                         
-                        # Se ci sono ancora movimenti pendenti, processa il prossimo usando la funzione helper
+                        logger.info(
+                            f"[MOVEMENT] Movimento processato, rimangono {len(pending_movements)} movimenti pendenti"
+                        )
+                        
+                        # Se ci sono ancora movimenti pendenti, processa il prossimo
                         if pending_movements:
+                            # Usa query.message per inviare il prossimo messaggio
                             await self._process_next_pending_movement(
                                 query.message, context, telegram_id, user.business_name
                             )
                         else:
-                            # Tutti i movimenti sono stati processati
+                            # Tutti i movimenti sono stati processati - mostra sommario finale
+                            await self._show_final_summary(query.message, context)
                             logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
                             context.user_data.pop('pending_movements', None)
                             context.user_data.pop('original_message', None)
+                            context.user_data.pop('current_movement_index', None)
+                            context.user_data.pop('completed_movements', None)
             else:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 
