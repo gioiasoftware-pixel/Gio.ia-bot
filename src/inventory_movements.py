@@ -921,20 +921,28 @@ class InventoryMovementManager:
                                 f"Prossimo: {next_movement['type']} {next_movement['quantity']} {next_movement['wine_name']}"
                             )
                             
-                            # Crea un update fittizio per processare il prossimo movimento
-                            # Usa il messaggio originale salvato nel context
-                            original_message = context.user_data.get('original_message', '')
+                            # Processa il prossimo movimento usando query.message invece di update.message
+                            # Crea un update fittizio con query.message per mantenere il contesto
+                            from telegram import Update as TelegramUpdate
+                            from telegram import Message
+                            
+                            # Usa query.message come base per il prossimo movimento
+                            fake_update = TelegramUpdate(
+                                update_id=update.update_id,
+                                message=query.message,  # Usa il messaggio del callback
+                                callback_query=None
+                            )
                             
                             # Processa il prossimo movimento
                             if next_movement['type'] == 'consumo':
                                 await self._process_consumo(
-                                    update, context, telegram_id, 
+                                    fake_update, context, telegram_id, 
                                     next_movement['wine_name'], 
                                     next_movement['quantity']
                                 )
                             else:
                                 await self._process_rifornimento(
-                                    update, context, telegram_id, 
+                                    fake_update, context, telegram_id, 
                                     next_movement['wine_name'], 
                                     next_movement['quantity']
                                 )
