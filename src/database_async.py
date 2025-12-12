@@ -262,6 +262,32 @@ class AsyncDatabaseManager:
                 # Criteri: contiene "del", "di", "da" O inizia con "ca" (es. "ca del bosco")
                 is_likely_producer = any(word in search_term_clean for word in [' del ', ' di ', ' da ', 'ca ', 'ca\'', 'castello', 'tenuta', 'azienda'])
                 
+                # Determina se la query è probabilmente un nome di uvaggio
+                # Criteri: singola parola (o parole legate da apostrofo/trattino), non produttore, non numerico
+                # Uvaggi italiani comuni (lista parziale)
+                common_grape_varieties = {
+                    'vermentino', 'vermentino', 'nero', 'davola', 'nero d\'avola', 'nerodavola',
+                    'sangiovese', 'montepulciano', 'barbera', 'nebbiolo', 'dolcetto',
+                    'pinot', 'pinot grigio', 'pinot grigio', 'pinot nero', 'pinot bianco',
+                    'chardonnay', 'sauvignon', 'cabernet', 'merlot', 'syrah', 'shiraz',
+                    'prosecco', 'glera', 'moscato', 'glera', 'corvina', 'rondinella',
+                    'garganega', 'trebbiano', 'malvasia', 'canaiolo', 'colorino',
+                    'fiano', 'greco', 'falanghina', 'aglianico', 'primitivo', 'negroamaro',
+                    'frapatto', 'nerello', 'carricante', 'catarratto', 'inzolia',
+                    'gewurztraminer', 'gewurtzraminer', 'riesling', 'traminer',
+                    'garnacha', 'tempranillo', 'grenache', 'mourvedre'
+                }
+                # Normalizza il termine per confronto (rimuovi apostrofi/spazi)
+                search_normalized = search_term_clean.replace(' ', '').replace('\'', '').replace('-', '')
+                is_likely_grape_variety = (
+                    not is_likely_producer and 
+                    search_numeric is None and 
+                    search_float is None and
+                    (search_term_clean in common_grape_varieties or 
+                     search_normalized in common_grape_varieties or
+                     any(gv in search_term_clean for gv in common_grape_varieties if len(gv) >= 6))
+                )
+                
                 search_pattern = f"%{search_term_clean}%"
                 search_pattern_unaccent = f"%{search_term_unaccent}%"
                 
@@ -352,7 +378,6 @@ class AsyncDatabaseManager:
                     query_params["search_float"] = search_float
                 
                 # Calcolo match_priority più intelligente (usando parametri SQL corretti)
-                # Priorità: name > producer > grape_variety
                 if is_likely_producer:
                     # Per produttori, producer ha priorità più alta
                     priority_case = """
@@ -363,6 +388,21 @@ class AsyncDatabaseManager:
                             WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
                             WHEN grape_variety ILIKE :search_pattern THEN 3
                             WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
+                            ELSE 4
+                        END
+                    """
+                elif is_likely_grape_variety:
+                    # Per uvaggi, grape_variety ha priorità più alta rispetto a name
+                    # Questo garantisce che vini con uvaggio corrispondente vengano prima
+                    # anche se altri vini hanno il termine nel nome
+                    priority_case = """
+                        CASE 
+                            WHEN grape_variety ILIKE :search_pattern THEN 1
+                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
+                            WHEN producer ILIKE :search_pattern THEN 2
+                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
+                            WHEN name ILIKE :search_pattern THEN 3
+                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
                             ELSE 4
                         END
                     """
