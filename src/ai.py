@@ -454,7 +454,27 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
     if not found_wines:
         return None  # Passa all'AI normale
     
-    wine = found_wines[0]  # Prendi il primo vino (più rilevante)
+    # Se ci sono più vini, mostra bottoni per selezione invece di limitarsi al primo
+    if len(found_wines) > 1:
+        # Pattern per "che X ho?" - mostra tutti i vini
+        che_ho_patterns = [
+            r'che\s+(.+?)\s+ho\??',
+            r'che\s+(.+?)\s+hai\??',
+            r'quali\s+(.+?)\s+ho\??',
+            r'quali\s+(.+?)\s+hai\??',
+        ]
+        for pattern in che_ho_patterns:
+            if re.search(pattern, prompt_lower):
+                logger.info(f"[FORMATTED] Pattern 'che X ho' rilevato con {len(found_wines)} vini, mostro bottoni")
+                wine_ids = [str(w.id) for w in found_wines[:10]]  # Max 10 bottoni
+                return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+        
+        # Per altri pattern con più vini, mostra comunque bottoni per selezione
+        logger.info(f"[FORMATTED] Trovati {len(found_wines)} vini, mostro bottoni per selezione invece di limitare al primo")
+        wine_ids = [str(w.id) for w in found_wines[:10]]  # Max 10 bottoni
+        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+    
+    wine = found_wines[0]  # Prendi il primo vino (più rilevante) - solo se c'è un solo vino
     
     # Controlla pattern "quanti X ho"
     for pattern in quantity_patterns:
@@ -481,6 +501,17 @@ def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: l
     for pattern in exists_patterns:
         if re.search(pattern, prompt_lower):
             return format_wine_exists(wine)
+    
+    # Pattern per "che X ho?" - se c'è un solo vino, mostra info
+    che_ho_patterns = [
+        r'che\s+(.+?)\s+ho\??',
+        r'che\s+(.+?)\s+hai\??',
+        r'quali\s+(.+?)\s+ho\??',
+        r'quali\s+(.+?)\s+hai\??',
+    ]
+    for pattern in che_ho_patterns:
+        if re.search(pattern, prompt_lower):
+            return format_wine_info(wine)
     
     # Fallback: se il prompt contiene "su" o "sul" e abbiamo un vino, usa sempre format_wine_info
     if re.search(r'\b(su|sul)\b', prompt_lower) and wine:
