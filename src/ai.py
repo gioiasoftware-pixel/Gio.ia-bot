@@ -416,6 +416,90 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
         return f"❌ **Errore durante il processamento**\n\nErrore: {str(e)[:200]}\n\nRiprova più tardi."
 
 
+def _clean_wine_search_term(term: str) -> str:
+    """
+    Pulisce il termine di ricerca rimuovendo parole interrogative, articoli, congiunzioni, ecc.
+    ma preserva quelle che fanno parte del nome del vino (es. "del" in "Ca del Bosco").
+    
+    Args:
+        term: Termine di ricerca grezzo
+    
+    Returns:
+        Termine pulito per la ricerca
+    """
+    if not term:
+        return term
+    
+    term_lower = term.lower().strip()
+    
+    # Parole interrogative da rimuovere
+    interrogative_words = {'che', 'quale', 'quali', 'quanto', 'quanti', 'quante', 'cosa', 'cos\'', 'cos', 
+                          'chi', 'dove', 'come', 'perché', 'perche', 'perchè'}
+    
+    # Articoli da rimuovere
+    articles = {'il', 'lo', 'la', 'gli', 'le', 'i', 'un', 'uno', 'una'}
+    
+    # Verbi comuni che indicano possesso/richiesta
+    common_verbs = {'ho', 'hai', 'ha', 'abbiamo', 'avete', 'hanno', 'è', 'sono', 'c\'è', 'ci sono',
+                    'vendo', 'vendi', 'vende', 'vendiamo', 'vendete', 'vendono'}
+    
+    # Preposizioni articolate che POTREBBERO far parte del nome (es. "del" in "Ca del Bosco")
+    # Queste vengono preservate se seguite da una parola
+    articulated_prepositions = {'del', 'della', 'dello', 'dei', 'degli', 'delle', 
+                                'dal', 'dalla', 'dallo', 'dai', 'dagli', 'dalle'}
+    
+    # Preposizioni semplici da rimuovere solo se all'inizio
+    simple_prepositions = {'di', 'da', 'in', 'su', 'per', 'con', 'tra', 'fra'}
+    
+    words = term_lower.split()
+    if not words:
+        return term
+    
+    cleaned_words = []
+    
+    # Rimuovi parole all'inizio che sono interrogative, articoli o verbi
+    start_idx = 0
+    for i, word in enumerate(words):
+        if word in interrogative_words or word in articles:
+            start_idx = i + 1
+            continue
+        break
+    
+    # Processa le parole rimanenti
+    i = start_idx
+    while i < len(words):
+        word = words[i]
+        
+        # Se è una preposizione articolata (es. "del", "della"), potrebbe far parte del nome
+        if word in articulated_prepositions:
+            # Se c'è almeno una parola dopo, probabilmente fa parte del nome (es. "Ca del Bosco")
+            if i + 1 < len(words):
+                cleaned_words.append(word)
+                i += 1
+                continue
+        
+        # Rimuovi verbi comuni
+        if word in common_verbs:
+            i += 1
+            continue
+        
+        # Rimuovi preposizioni semplici solo se sono all'inizio della parte pulita
+        if not cleaned_words and word in simple_prepositions:
+            i += 1
+            continue
+        
+        # Aggiungi la parola
+        cleaned_words.append(word)
+        i += 1
+    
+    result = ' '.join(cleaned_words).strip()
+    
+    # Rimuovi anche eventuali segni di punteggiatura finali
+    result = re.sub(r'[?.,;:!]+$', '', result).strip()
+    
+    return result if result else term  # Se rimane vuoto, ritorna il termine originale
+
+
 def _format_wine_response_directly(prompt: str, telegram_id: int, found_wines: list) -> str:
     """
     Genera risposte pre-formattate colorate per domande specifiche sui vini.
@@ -578,6 +662,8 @@ INVENTARIO ATTUALE:
                     # Rileva se l'utente sta chiedendo informazioni su un vino specifico
                     # Pattern ordinati dalla più specifica alla più generica
                     wine_search_patterns = [
+                        # Pattern 0: "che X ho/hai?" - PRIMA di altri pattern per catturare correttamente
+                        r'(?:che|quale|quali)\s+(.+?)(?:\s+ho|\s+hai|\s+ci\s+sono|\s+in\s+cantina|\s+in\s+magazzino|\s+quantità|\?|$)',
                         # Pattern 1: "quanti/quante bottiglie di X ho/hai" (MOLTO SPECIFICO)
                         r'(?:quanti|quante)\s+bottiglie?\s+di\s+(.+?)(?:\s+ho|\s+hai|\s+ci\s+sono|\s+in\s+cantina|\s+in\s+magazzino|\s+quantità|$)',
                         # Pattern 2: "quanti/quante X ho/hai" (senza "bottiglie")
@@ -596,13 +682,12 @@ INVENTARIO ATTUALE:
                     for pattern in wine_search_patterns:
                         match = re.search(pattern, prompt.lower())
                         if match:
-                            wine_search_term = match.group(1).strip()
-                            # Rimuovi parole comuni (incluso "bottiglie", "di", "bottiglia", ecc.)
-                            wine_search_term = re.sub(r'\b(ho|hai|in|cantina|magazzino|quanti|quante|quanto|vendo|vendi|prezzo|informazioni|dettagli|info|su|del|dello|della|bottiglie|bottiglia|di|mi|dici|dirmi)\b', '', wine_search_term, flags=re.IGNORECASE).strip()
-                            # Rimuovi spazi multipli
-                            wine_search_term = re.sub(r'\s+', ' ', wine_search_term).strip()
+                            raw_term = match.group(1).strip()
+                            # Pulisci il termine rimuovendo parole interrogative, articoli, ecc.
+                            # ma preserva quelle che fanno parte del nome (es. "del" in "Ca del Bosco")
+                            wine_search_term = _clean_wine_search_term(raw_term)
                             if wine_search_term and len(wine_search_term) > 2:  # Almeno 3 caratteri
-                                logger.info(f"Rilevata ricerca vino specifico: '{wine_search_term}'")
+                                logger.info(f"[WINE_SEARCH] Pattern matchato: '{pattern[:50]}...' | Termine estratto: '{raw_term}' → pulito: '{wine_search_term}'")
                                 break
                     
                     # Se è stata rilevata una ricerca, cerca nel database - ASYNC
