@@ -295,11 +295,227 @@ async def _handle_qualitative_query_fallback(telegram_id: int, prompt: str) -> O
                 if result:
                     return result
         
+        # Prova pattern sensoriali (tannico, corposo, floreale, ecc.)
+        sensory_result = await _handle_sensory_query(telegram_id, prompt)
+        if sensory_result:
+            return sensory_result
+        
         # Se non trova pattern, ritorna None (usa risposta AI originale)
         return None
         
     except Exception as e:
         logger.error(f"Errore in _handle_qualitative_query_fallback: {e}", exc_info=True)
+        return None
+
+
+async def _handle_sensory_query(telegram_id: int, prompt: str) -> Optional[str]:
+    """
+    Gestisce query sensoriali usando approccio ibrido:
+    1. Ricerca parole chiave in description/notes
+    2. Mappatura euristica (wine_type + alcohol_content)
+    3. Mappatura per uvaggi tipici
+    4. Combina e ordina risultati
+    
+    Args:
+        telegram_id: ID Telegram utente
+        prompt: Testo della query originale
+    
+    Returns:
+        Risposta formattata o None se non riesce a interpretare
+    """
+    try:
+        prompt_lower = prompt.lower().strip()
+        from .database_async import async_db_manager, get_async_session
+        from sqlalchemy import text as sql_text
+        from .response_templates import format_wine_info
+        
+        # Mappatura caratteristiche sensoriali
+        sensory_mapping = {
+            'tannico': {
+                'keywords': ['tannico', 'tannini', 'strutturato', 'tanninico', 'astringente'],
+                'wine_types': ['Rosso'],  # I vini tannici sono tipicamente rossi
+                'grape_varieties': ['Nebbiolo', 'Cabernet', 'Sangiovese', 'Montepulciano', 'Cabernet Sauvignon', 'Aglianico', 'Tannat'],
+                'order_by': 'alcohol_content DESC',  # Proxy per struttura
+                'description': 'tannici'
+            },
+            'corposo': {
+                'keywords': ['corposo', 'corpo', 'strutturato', 'denso', 'ricco'],
+                'wine_types': None,  # Può essere rosso o bianco
+                'grape_varieties': ['Chardonnay', 'Amarone', 'Barolo', 'Brunello', 'Montepulciano', 'Nebbiolo'],
+                'order_by': 'alcohol_content DESC',  # Gradazione alta = più corpo
+                'description': 'corposi'
+            },
+            'floreale': {
+                'keywords': ['floreale', 'fiore', 'fiorito', 'profumato', 'aromatico'],
+                'wine_types': ['Bianco', 'Rosato'],  # Tipicamente bianchi/rosati
+                'grape_varieties': ['Sauvignon', 'Gewürztraminer', 'Gewurtzraminer', 'Moscato', 'Riesling', 'Malvasia', 'Traminer'],
+                'order_by': None,  # Non correlato a gradazione
+                'description': 'floreali'
+            },
+            'secco': {
+                'keywords': ['secco', 'asciutto', 'non dolce'],
+                'wine_types': None,  # Può essere qualsiasi tipo
+                'grape_varieties': None,  # Non specifico per uvaggio
+                'order_by': 'alcohol_content DESC',  # Vini secchi spesso più alcolici
+                'description': 'secchi'
+            },
+            'boccato': {
+                'keywords': ['boccato', 'bocca', 'persistente', 'lungo', 'concentrato'],
+                'wine_types': None,
+                'grape_varieties': ['Nebbiolo', 'Sangiovese', 'Cabernet', 'Aglianico'],
+                'order_by': 'alcohol_content DESC',  # Gradazione alta = più persistenza
+                'description': 'boccati'
+            }
+        }
+        
+        # Identifica caratteristica sensoriale richiesta
+        matched_sensory = None
+        for sensory_key, config in sensory_mapping.items():
+            # Pattern per "vino più [caratteristica]"
+            pattern = rf'\b(più\s+)?{sensory_key}\b|\b{config["description"]}\b'
+            if re.search(pattern, prompt_lower):
+                matched_sensory = sensory_key
+                break
+        
+        if not matched_sensory:
+            return None
+        
+        logger.info(f"[SENSORY_QUERY] Caratteristica rilevata: {matched_sensory}")
+        config = sensory_mapping[matched_sensory]
+        
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            return None
+        
+        table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+        all_results = []  # Lista di tuple (wine, score)
+        
+        async with await get_async_session() as session:
+            # 1. RICERCA NEI CAMPI TESTUALI (priorità alta)
+            if config['keywords']:
+                keyword_conditions = []
+                params = {"user_id": user.id}
+                for idx, keyword in enumerate(config['keywords']):
+                    keyword_conditions.append(f"(LOWER(description) LIKE :kw_{idx} OR LOWER(notes) LIKE :kw_{idx})")
+                    params[f"kw_{idx}"] = f"%{keyword}%"
+                
+                if keyword_conditions:
+                    keyword_query = sql_text(f"""
+                        SELECT *
+                        FROM {table_name}
+                        WHERE user_id = :user_id
+                        AND ({' OR '.join(keyword_conditions)})
+                        LIMIT 50
+                    """)
+                    result = await session.execute(keyword_query, params)
+                    rows = result.fetchall()
+                    
+                    for row in rows:
+                        wine = _row_to_wine(row)
+                        if wine:
+                            all_results.append((wine, 10))  # Score alto per match diretto
+            
+            # 2. MAPPATURA EURISTICA (wine_type + alcohol_content)
+            if config['wine_types'] or config['order_by']:
+                euristic_filters = []
+                euristic_params = {"user_id": user.id}
+                
+                if config['wine_types']:
+                    wine_type_conditions = []
+                    for idx, wt in enumerate(config['wine_types']):
+                        wine_type_conditions.append(f"wine_type = :wt_{idx}")
+                        euristic_params[f"wt_{idx}"] = wt
+                    euristic_filters.append(f"({' OR '.join(wine_type_conditions)})")
+                
+                if config['order_by']:
+                    order_clause = f"ORDER BY {config['order_by']} NULLS LAST"
+                else:
+                    order_clause = "ORDER BY name ASC"
+                
+                euristic_query = sql_text(f"""
+                    SELECT *
+                    FROM {table_name}
+                    WHERE user_id = :user_id
+                    {'AND ' + ' AND '.join(euristic_filters) if euristic_filters else ''}
+                    {order_clause}
+                    LIMIT 30
+                """)
+                
+                result = await session.execute(euristic_query, euristic_params)
+                rows = result.fetchall()
+                
+                for row in rows:
+                    wine = _row_to_wine(row)
+                    if wine and not any(w.id == wine.id for w, _ in all_results):
+                        score = 7 if config['wine_types'] else 5  # Score medio-alto
+                        all_results.append((wine, score))
+            
+            # 3. MAPPATURA PER UVAGGI TIPICI
+            if config['grape_varieties']:
+                grape_conditions = []
+                grape_params = {"user_id": user.id}
+                for idx, grape in enumerate(config['grape_varieties']):
+                    grape_conditions.append(f"LOWER(grape_variety) LIKE :grape_{idx}")
+                    grape_params[f"grape_{idx}"] = f"%{grape.lower()}%"
+                
+                if grape_conditions:
+                    grape_query = sql_text(f"""
+                        SELECT *
+                        FROM {table_name}
+                        WHERE user_id = :user_id
+                        AND ({' OR '.join(grape_conditions)})
+                        ORDER BY alcohol_content DESC NULLS LAST
+                        LIMIT 30
+                    """)
+                    result = await session.execute(grape_query, grape_params)
+                    rows = result.fetchall()
+                    
+                    for row in rows:
+                        wine = _row_to_wine(row)
+                        if wine and not any(w.id == wine.id for w, _ in all_results):
+                            all_results.append((wine, 6))  # Score medio
+            
+            # 4. ORDINA PER SCORE (priorità) e rimuovi duplicati
+            seen_ids = set()
+            unique_results = []
+            for wine, score in sorted(all_results, key=lambda x: x[1], reverse=True):
+                if wine.id not in seen_ids:
+                    seen_ids.add(wine.id)
+                    unique_results.append(wine)
+                    if len(unique_results) >= 10:  # Max 10 risultati
+                        break
+            
+            if not unique_results:
+                return f"❌ Non ho trovato vini {config['description']} nel tuo inventario. 💡 Prova ad aggiungere descrizioni dettagliate ai tuoi vini per ottenere risultati migliori."
+            
+            # 5. FORMATTA RISPOSTA COLLOQUIALE
+            if len(unique_results) == 1:
+                return f"🍷 Il vino più {config['description']} che hai è:\n\n{format_wine_info(unique_results[0])}"
+            else:
+                from .response_templates import format_inventory_list
+                response = f"🍷 **I vini più {config['description']}** nel tuo inventario:\n\n"
+                response += format_inventory_list(unique_results, limit=10)
+                return response
+        
+    except Exception as e:
+        logger.error(f"Errore in _handle_sensory_query: {e}", exc_info=True)
+        return None
+
+
+def _row_to_wine(row) -> Optional[Any]:
+    """Converte una riga SQL in oggetto Wine"""
+    try:
+        from .database_async import Wine
+        wine = Wine()
+        for key in ['id', 'user_id', 'name', 'producer', 'vintage', 'grape_variety',
+                   'region', 'country', 'wine_type', 'classification', 'quantity',
+                   'min_quantity', 'cost_price', 'selling_price', 'alcohol_content',
+                   'description', 'notes', 'created_at', 'updated_at']:
+            if hasattr(row, key):
+                setattr(wine, key, getattr(row, key))
+        return wine
+    except Exception as e:
+        logger.error(f"Errore conversione row to wine: {e}")
         return None
 
 
