@@ -835,6 +835,119 @@ class InventoryMovementManager:
         
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
+    async def _process_next_pending_movement(self, message, context: ContextTypes.DEFAULT_TYPE,
+                                            telegram_id: int, business_name: str) -> None:
+        """
+        Helper per processare il prossimo movimento pendente nella lista.
+        Gestisce ambiguità e processamento diretto.
+        """
+        from .processor_client import processor_client
+        
+        pending_movements = context.user_data.get('pending_movements', [])
+        if not pending_movements:
+            # Tutti i movimenti sono stati processati
+            logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
+            context.user_data.pop('pending_movements', None)
+            context.user_data.pop('original_message', None)
+            return
+        
+        next_movement = pending_movements[0]
+        logger.info(
+            f"[MOVEMENT] Processando movimento multiplo pendente: {next_movement['type']} "
+            f"{next_movement['quantity']} {next_movement['wine_name']}"
+        )
+        
+        # Cerca i vini corrispondenti
+        matching_wines = await async_db_manager.search_wines(
+            telegram_id, next_movement['wine_name'], limit=50
+        )
+        
+        if len(matching_wines) > 1:
+            # Ci sono ambiguità, mostra pulsanti
+            msg_text = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{next_movement['wine_name']}'**\n\n"
+            msg_text += "Quale tra questi intendi?\n\n"
+            
+            keyboard = []
+            buttons_per_row = 2
+            
+            for i in range(0, len(matching_wines), buttons_per_row):
+                row = []
+                for j in range(buttons_per_row):
+                    if i + j < len(matching_wines):
+                        wine = matching_wines[i + j]
+                        wine_display = wine.name
+                        if wine.producer:
+                            wine_display += f" ({wine.producer})"
+                        if wine.vintage:
+                            wine_display += f" {wine.vintage}"
+                        
+                        if len(wine_display) > 30:
+                            wine_display = wine_display[:27] + "..."
+                        
+                        callback_data = f"movimento_{next_movement['type']}:{wine.id}:{next_movement['quantity']}"
+                        row.append(InlineKeyboardButton(wine_display, callback_data=callback_data))
+                keyboard.append(row)
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.reply_text(msg_text, parse_mode='Markdown', reply_markup=reply_markup)
+        elif len(matching_wines) == 1:
+            # Una sola corrispondenza, processa direttamente
+            exact_wine_name = matching_wines[0].name
+            result = await processor_client.process_movement(
+                telegram_id=telegram_id,
+                business_name=business_name,
+                wine_name=exact_wine_name,
+                movement_type=next_movement['type'],
+                quantity=next_movement['quantity']
+            )
+            
+            if result.get('status') == 'success':
+                if next_movement['type'] == 'consumo':
+                    msg = (
+                        f"✅ **Consumo registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📉 **Consumate:** {next_movement['quantity']} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                else:
+                    msg = (
+                        f"✅ **Rifornimento registrato**\n\n"
+                        f"🍷 **Vino:** {result.get('wine_name')}\n"
+                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
+                        f"📈 **Aggiunte:** {next_movement['quantity']} bottiglie\n\n"
+                        f"💾 **Movimento salvato** nel sistema"
+                    )
+                await message.reply_text(msg, parse_mode='Markdown')
+                
+                # Rimuovi questo movimento e continua con il prossimo
+                pending_movements.pop(0)
+                context.user_data['pending_movements'] = pending_movements
+                
+                # Processa ricorsivamente il prossimo movimento
+                if pending_movements:
+                    await self._process_next_pending_movement(message, context, telegram_id, business_name)
+                else:
+                    # Tutti i movimenti completati
+                    context.user_data.pop('pending_movements', None)
+                    context.user_data.pop('original_message', None)
+            else:
+                error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
+                await message.reply_text(
+                    f"❌ **Errore durante il processamento**\n\n{error_msg[:200]}"
+                )
+        else:
+            # Nessuna corrispondenza
+            await message.reply_text(
+                f"❌ **Vino non trovato**\n\n"
+                f"Non ho trovato '{next_movement['wine_name']}' nel tuo inventario."
+            )
+            # Rimuovi questo movimento e continua con il prossimo
+            pending_movements.pop(0)
+            context.user_data['pending_movements'] = pending_movements
+            if pending_movements:
+                await self._process_next_pending_movement(message, context, telegram_id, business_name)
+    
     async def process_movement_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
                                              wine_id: int, movement_type: str, quantity: int) -> bool:
         """
@@ -985,13 +1098,12 @@ class InventoryMovementManager:
                                         )
                                     await query.message.reply_text(msg, parse_mode='Markdown')
                                     
+                                    # Rimuovi questo movimento dalla lista (già rimosso sopra)
                                     # Continua con il prossimo movimento se ce ne sono altri
-                                    if len(pending_movements) > 1:
-                                        # Rimuovi questo movimento e processa il prossimo
-                                        pending_movements.pop(0)
-                                        context.user_data['pending_movements'] = pending_movements
-                                        # Ricorsivamente processa il prossimo (ma limitiamo la ricorsione)
-                                        # Invece, lasciamo che il prossimo callback lo gestisca
+                                    if pending_movements:
+                                        await self._process_next_pending_movement(
+                                            query.message, context, telegram_id, user.business_name
+                                        )
                                 else:
                                     error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                                     await query.message.reply_text(
