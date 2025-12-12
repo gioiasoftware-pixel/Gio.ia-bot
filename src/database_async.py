@@ -276,11 +276,14 @@ class AsyncDatabaseManager:
                         pass
                 
                 # Condizioni base: match completo su frase (priorità alta)
+                # Include anche grape_variety (uvaggio) per trovare vini cercando per vitigno
                 query_conditions = [
                     "name ILIKE :search_pattern",
                     "producer ILIKE :search_pattern",
+                    "grape_variety ILIKE :search_pattern",
                     "translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
-                    "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
+                    "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
+                    "translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
                 ]
                 
                 # Se ci sono parole significative, aggiungi condizioni più specifiche
@@ -289,21 +292,24 @@ class AsyncDatabaseManager:
                     if len(search_words) > 1:
                         # Costruisci condizione AND: tutte le parole significative devono essere presenti
                         if is_likely_producer:
-                            # Per produttori, tutte le parole devono matchare nel producer O nel name
+                            # Per produttori, tutte le parole devono matchare nel producer O nel name O nel grape_variety
                             word_conditions_producer = []
                             word_conditions_name = []
+                            word_conditions_grape = []
                             for i, word in enumerate(search_words):
                                 word_conditions_producer.append(f"producer ILIKE :word_{i}")
                                 word_conditions_name.append(f"name ILIKE :word_{i}")
-                            # Match completo su producer (priorità) O tutte le parole su name
+                                word_conditions_grape.append(f"grape_variety ILIKE :word_{i}")
+                            # Match completo su producer (priorità) O tutte le parole su name O grape_variety
                             query_conditions.append(f"({' AND '.join(word_conditions_producer)})")
                             query_conditions.append(f"({' AND '.join(word_conditions_name)})")
+                            query_conditions.append(f"({' AND '.join(word_conditions_grape)})")
                         else:
-                            # Per altre query, tutte le parole devono matchare (name O producer insieme)
+                            # Per altre query, tutte le parole devono matchare (name O producer O grape_variety insieme)
                             word_conditions_combined = []
                             for i, word in enumerate(search_words):
                                 word_conditions_combined.append(
-                                    f"(name ILIKE :word_{i} OR producer ILIKE :word_{i})"
+                                    f"(name ILIKE :word_{i} OR producer ILIKE :word_{i} OR grape_variety ILIKE :word_{i})"
                                 )
                             query_conditions.append(f"({' AND '.join(word_conditions_combined)})")
                     else:
@@ -313,12 +319,14 @@ class AsyncDatabaseManager:
                             # Per produttori, cerca principalmente nel producer
                             query_conditions.extend([
                                 f"producer ILIKE :word_0",
-                                f"name ILIKE :word_0"
+                                f"name ILIKE :word_0",
+                                f"grape_variety ILIKE :word_0"
                             ])
                         else:
                             query_conditions.extend([
                                 f"name ILIKE :word_0",
-                                f"producer ILIKE :word_0"
+                                f"producer ILIKE :word_0",
+                                f"grape_variety ILIKE :word_0"
                             ])
                 
                 query_params = {
@@ -344,6 +352,7 @@ class AsyncDatabaseManager:
                     query_params["search_float"] = search_float
                 
                 # Calcolo match_priority più intelligente (usando parametri SQL corretti)
+                # Priorità: name > producer > grape_variety
                 if is_likely_producer:
                     # Per produttori, producer ha priorità più alta
                     priority_case = """
@@ -352,18 +361,22 @@ class AsyncDatabaseManager:
                             WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
                             WHEN name ILIKE :search_pattern THEN 2
                             WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
-                            ELSE 3
+                            WHEN grape_variety ILIKE :search_pattern THEN 3
+                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
+                            ELSE 4
                         END
                     """
                 else:
-                    # Per altri, name ha priorità più alta
+                    # Per altri, name ha priorità più alta, poi producer, poi grape_variety
                     priority_case = """
                         CASE 
                             WHEN name ILIKE :search_pattern THEN 1
                             WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
                             WHEN producer ILIKE :search_pattern THEN 2
                             WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
-                            ELSE 3
+                            WHEN grape_variety ILIKE :search_pattern THEN 3
+                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
+                            ELSE 4
                         END
                     """
                 

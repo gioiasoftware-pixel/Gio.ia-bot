@@ -40,28 +40,54 @@ async def fuzzy_match_wine_name(telegram_id: int, wine_name: str, limit: int = 1
             return matching_wines
     
     # 3. Se ancora non trova, usa rapidfuzz per fuzzy matching su tutti i vini
+    # Cerca sia nel nome che nell'uvaggio (grape_variety)
     try:
         from rapidfuzz import fuzz, process
         all_wines = await async_db_manager.get_user_wines(telegram_id)
         
         if all_wines:
-            wine_names = [w.name for w in all_wines]
-            best_match = process.extractOne(
-                wine_name,
-                wine_names,
-                scorer=fuzz.WRatio,  # Weighted Ratio (migliore per typo)
-                score_cutoff=70  # Minimo 70% di similarità
-            )
+            # Crea lista di stringhe da cercare: nome vino + uvaggio (se presente)
+            search_strings = []
+            wine_to_string = {}  # Mappa stringa -> vino per recupero
             
-            if best_match:
-                matched_name, score, _ = best_match
-                logger.info(
-                    f"[FUZZY_MATCH] Rapidfuzz match: '{wine_name}' → '{matched_name}' "
-                    f"(similarità: {score:.1f}%)"
+            for wine in all_wines:
+                # Aggiungi nome vino
+                if wine.name:
+                    search_strings.append(wine.name.lower())
+                    wine_to_string[wine.name.lower()] = wine
+                
+                # Aggiungi uvaggio se presente
+                if wine.grape_variety:
+                    grape_lower = wine.grape_variety.lower()
+                    search_strings.append(grape_lower)
+                    wine_to_string[grape_lower] = wine
+                    
+                    # Aggiungi anche combinazione nome + uvaggio
+                    if wine.name:
+                        combined = f"{wine.name.lower()} {grape_lower}"
+                        search_strings.append(combined)
+                        wine_to_string[combined] = wine
+            
+            if search_strings:
+                best_match = process.extractOne(
+                    wine_name.lower(),
+                    search_strings,
+                    scorer=fuzz.WRatio,  # Weighted Ratio (migliore per typo)
+                    score_cutoff=70  # Minimo 70% di similarità
                 )
-                # Trova il vino corrispondente
-                matching_wines = [w for w in all_wines if w.name == matched_name]
-                return matching_wines
+                
+                if best_match:
+                    matched_string, score, _ = best_match
+                    matched_wine = wine_to_string.get(matched_string)
+                    
+                    if matched_wine:
+                        logger.info(
+                            f"[FUZZY_MATCH] Rapidfuzz match: '{wine_name}' → '{matched_string}' "
+                            f"(similarità: {score:.1f}%) - vino: {matched_wine.name}"
+                        )
+                        # Trova tutti i vini con lo stesso nome (potrebbero esserci duplicati)
+                        matching_wines = [w for w in all_wines if w.id == matched_wine.id]
+                        return matching_wines
     except ImportError:
         logger.debug("[FUZZY_MATCH] rapidfuzz non disponibile, skip fuzzy matching avanzato")
     except Exception as e:
