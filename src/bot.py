@@ -181,7 +181,92 @@ async def chat_handler(update, context):
                 value=value_text
             )
             if isinstance(result, dict) and result.get('status') == 'success':
-                await update.message.reply_text("✅ Aggiornamento salvato")
+                # Mostra scheda info aggiornata
+                from .database_async import async_db_manager
+                from .response_templates import format_wine_info
+                
+                user_wines = await async_db_manager.get_user_wines(telegram_id)
+                updated_wine = None
+                for wine in user_wines:
+                    if wine.id == pending['wine_id']:
+                        updated_wine = wine
+                        break
+                
+                if updated_wine:
+                    wine_info = format_wine_info(updated_wine)
+                    
+                    # Processa marker FILL_FIELDS e EDIT_FIELDS se presenti
+                    fill_marker = None
+                    edit_marker = None
+                    
+                    if "[[FILL_FIELDS:" in wine_info:
+                        fill_start = wine_info.rfind("[[FILL_FIELDS:")
+                        fill_text = wine_info[fill_start:wine_info.find("]]", fill_start) + 2] if wine_info.find("]]", fill_start) >= 0 else None
+                        if fill_text:
+                            fill_marker = fill_text
+                    
+                    if "[[EDIT_FIELDS:" in wine_info:
+                        edit_start = wine_info.rfind("[[EDIT_FIELDS:")
+                        edit_text = wine_info[edit_start:wine_info.find("]]", edit_start) + 2] if wine_info.find("]]", edit_start) >= 0 else None
+                        if edit_text:
+                            edit_marker = edit_text
+                    
+                    # Pulisci wine_info rimuovendo i marker
+                    wine_info_clean = wine_info
+                    if fill_marker:
+                        wine_info_clean = wine_info_clean.replace(fill_marker, "").strip()
+                    if edit_marker:
+                        wine_info_clean = wine_info_clean.replace(edit_marker, "").strip()
+                    wine_info_clean = wine_info_clean.rstrip()
+                    
+                    # Estrai fields dai marker
+                    fill_fields = []
+                    edit_fields = []
+                    
+                    if fill_marker:
+                        marker_inner = fill_marker.strip("[]")
+                        parts = marker_inner.split(":", 2)
+                        fill_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                    
+                    if edit_marker:
+                        marker_inner = edit_marker.strip("[]")
+                        parts = marker_inner.split(":", 2)
+                        edit_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                    
+                    # Salva dati nel context per callback successivi
+                    context.user_data[f'wine_fields_{pending["wine_id"]}'] = {
+                        'fill_fields': fill_fields,
+                        'edit_fields': edit_fields,
+                        'original_text': wine_info_clean
+                    }
+                    
+                    # Mostra bottoni se ci sono campi da compilare/modificare
+                    main_buttons = []
+                    if fill_fields:
+                        main_buttons.append([InlineKeyboardButton(
+                            "➕ Aggiungi dati",
+                            callback_data=f"show_fill:{pending['wine_id']}"
+                        )])
+                    if edit_fields:
+                        main_buttons.append([InlineKeyboardButton(
+                            "📝 Modifica dati",
+                            callback_data=f"show_edit:{pending['wine_id']}"
+                        )])
+                    
+                    if main_buttons:
+                        keyboard = InlineKeyboardMarkup(main_buttons)
+                        await update.message.reply_text(
+                            f"✅ **Campo aggiornato con successo!**\n\n{wine_info_clean}",
+                            parse_mode='Markdown',
+                            reply_markup=keyboard
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"✅ **Campo aggiornato con successo!**\n\n{wine_info_clean}",
+                            parse_mode='Markdown'
+                        )
+                else:
+                    await update.message.reply_text("✅ Aggiornamento salvato")
             else:
                 err = (result or {}).get('error', 'Errore sconosciuto') if isinstance(result, dict) else str(result)
                 await update.message.reply_text(f"❌ Errore aggiornamento: {err[:200]}")

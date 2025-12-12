@@ -257,7 +257,7 @@ class ProcessorClient:
             timeout = aiohttp.ClientTimeout(total=30.0)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    f"{self.base_url}/update-wine-field",
+                    f"{self.base_url}/admin/update-wine-field",
                     data={
                         "telegram_id": telegram_id,
                         "business_name": business_name,
