@@ -285,11 +285,13 @@ async def _handle_informational_query(telegram_id: int, query_type: str, field: 
                 # Per vintage, NULL va alla fine (vini senza annata)
                 order_by = f"{field} ASC NULLS LAST"
         
-        # Query SQL per trovare il vino
+        # Query SQL: prima trova il valore min/max, poi tutti i vini con quel valore
         from sqlalchemy import text as sql_text
         from .database_async import get_async_session
-        query = sql_text(f"""
-            SELECT *
+        
+        # Step 1: Trova il valore min/max
+        find_value_query = sql_text(f"""
+            SELECT {field}
             FROM {table_name}
             WHERE user_id = :user_id
             AND {field} IS NOT NULL
@@ -298,10 +300,10 @@ async def _handle_informational_query(telegram_id: int, query_type: str, field: 
         """)
         
         async with await get_async_session() as session:
-            result = await session.execute(query, {"user_id": user.id})
-            row = result.fetchone()
+            result = await session.execute(find_value_query, {"user_id": user.id})
+            value_row = result.fetchone()
             
-            if not row:
+            if not value_row:
                 # Nessun vino trovato con quel campo valorizzato
                 field_names = {
                     'quantity': 'quantità',
@@ -312,36 +314,54 @@ async def _handle_informational_query(telegram_id: int, query_type: str, field: 
                 field_name = field_names.get(field, field)
                 return f"❌ Non ho trovato vini con {field_name} specificato nel tuo inventario."
             
-            # Costruisci oggetto Wine
+            target_value = value_row[0]
+            
+            # Step 2: Trova TUTTI i vini con quel valore
+            find_all_query = sql_text(f"""
+                SELECT *
+                FROM {table_name}
+                WHERE user_id = :user_id
+                AND {field} = :target_value
+                ORDER BY name ASC
+                LIMIT 20
+            """)
+            
+            result = await session.execute(find_all_query, {"user_id": user.id, "target_value": target_value})
+            rows = result.fetchall()
+            
+            if not rows:
+                return f"❌ Errore: valore trovato ma nessun vino corrispondente."
+            
+            # Costruisci oggetti Wine
             from .database_async import Wine
-            wine_dict = {
-                'id': row.id,
-                'user_id': row.user_id,
-                'name': row.name,
-                'producer': row.producer,
-                'vintage': row.vintage,
-                'grape_variety': row.grape_variety,
-                'region': row.region,
-                'country': row.country,
-                'wine_type': row.wine_type,
-                'classification': row.classification,
-                'quantity': row.quantity,
-                'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
-                'cost_price': row.cost_price,
-                'selling_price': row.selling_price,
-                'alcohol_content': row.alcohol_content,
-                'description': row.description,
-                'notes': row.notes,
-                'created_at': row.created_at,
-                'updated_at': row.updated_at
-            }
-            
-            wine = Wine()
-            for key, value in wine_dict.items():
-                setattr(wine, key, value)
-            
-            # Formatta risposta
-            wine_info = format_wine_info(wine)
+            wines = []
+            for row in rows:
+                wine_dict = {
+                    'id': row.id,
+                    'user_id': row.user_id,
+                    'name': row.name,
+                    'producer': row.producer,
+                    'vintage': row.vintage,
+                    'grape_variety': row.grape_variety,
+                    'region': row.region,
+                    'country': row.country,
+                    'wine_type': row.wine_type,
+                    'classification': row.classification,
+                    'quantity': row.quantity,
+                    'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                    'cost_price': row.cost_price,
+                    'selling_price': row.selling_price,
+                    'alcohol_content': row.alcohol_content,
+                    'description': row.description,
+                    'notes': row.notes,
+                    'created_at': row.created_at,
+                    'updated_at': row.updated_at
+                }
+                
+                wine = Wine()
+                for key, value in wine_dict.items():
+                    setattr(wine, key, value)
+                wines.append(wine)
             
             # Aggiungi contesto alla risposta
             field_names = {
@@ -358,9 +378,43 @@ async def _handle_informational_query(telegram_id: int, query_type: str, field: 
             }
             
             query_desc = query_names.get(query_type, {}).get(field, field)
-            header = f"🍷 **Vino con {query_desc}:**\n\n"
             
-            return header + wine_info
+            # Se c'è un solo vino, mostra scheda info completa
+            if len(wines) == 1:
+                wine_info = format_wine_info(wines[0])
+                header = f"🍷 **Vino con {query_desc}:**\n\n"
+                return header + wine_info
+            
+            # Se ci sono più vini, mostra elenco con pulsanti
+            # Formatta valore per display
+            if field in ('selling_price', 'cost_price'):
+                value_display = f"€{target_value:.2f}"
+            elif field == 'quantity':
+                value_display = f"{int(target_value)} bottiglie"
+            elif field == 'vintage':
+                value_display = str(int(target_value))
+            else:
+                value_display = str(target_value)
+            
+            field_display = field_names.get(field, field)
+            header = f"🍷 **Vini con {query_desc} ({field_display}: {value_display}):**\n\n"
+            
+            # Elenco vini
+            wine_list = []
+            for idx, wine in enumerate(wines, start=1):
+                name = wine.name or "Senza nome"
+                producer = f" ({wine.producer})" if wine.producer else ""
+                vintage = f" {wine.vintage}" if wine.vintage else ""
+                qty = f" — {wine.quantity} bott." if wine.quantity is not None else ""
+                wine_list.append(f"{idx}. {name}{producer}{vintage}{qty}")
+            
+            wine_list_text = "\n".join(wine_list)
+            
+            # Crea marker per pulsanti selezione
+            wine_ids = [str(w.id) for w in wines[:10]]  # Max 10 bottoni
+            buttons_marker = f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+            
+            return header + wine_list_text + "\n\n" + buttons_marker
             
     except Exception as e:
         logger.error(f"[INFORMATIONAL_QUERY] Errore gestione query informativa: {e}", exc_info=True)
