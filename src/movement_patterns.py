@@ -125,24 +125,167 @@ def parse_movement_pattern(message_text: str, patterns: List[str], allow_word_nu
     return None
 
 
-def parse_single_movement(message_text: str) -> Optional[Tuple[str, int, str]]:
+def extract_price_filters(message_text: str) -> Dict[str, Optional[float]]:
     """
-    Cerca un movimento singolo nel messaggio (consumo o rifornimento).
+    Estrae filtri di prezzo/costo dal messaggio.
+    Supporta pattern come:
+    - "intorno a 40€", "circa 40€", "a 40€"
+    - "sotto i 30€", "meno di 30€", "sotto 30€"
+    - "sopra i 50€", "più di 50€", "oltre 50€"
+    - "tra i 50 e i 100€", "da 50 a 100€", "tra 50-100€"
     
     Returns:
-        Tuple (movement_type, quantity, wine_name) o None
+        Dict con 'price_min', 'price_max', 'cost_min', 'cost_max', 'price_around', 'cost_around'
     """
+    filters = {
+        'price_min': None,
+        'price_max': None,
+        'cost_min': None,
+        'cost_max': None,
+        'price_around': None,
+        'cost_around': None
+    }
+    
+    message_lower = message_text.lower()
+    
+    # Pattern per estrarre numeri con € o euro
+    price_pattern = r'(\d+(?:[.,]\d+)?)\s*(?:€|euro|eur)'
+    
+    # Pattern "intorno a X€" o "circa X€" o "a X€" (prezzo vendita)
+    around_patterns = [
+        r'(?:intorno\s+a|circa|a)\s+' + price_pattern + r'(?:\s+di\s+prezzo|\s+di\s+vendita|\s+prezzo)?',
+        r'prezzo\s+(?:di\s+)?vendita\s+(?:intorno\s+a|circa|a)\s+' + price_pattern,
+    ]
+    for pattern in around_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            price = float(match.group(1).replace(',', '.'))
+            filters['price_around'] = price
+            # Range intorno: ±10% o ±5€ (il maggiore)
+            tolerance = max(price * 0.1, 5.0)
+            filters['price_min'] = price - tolerance
+            filters['price_max'] = price + tolerance
+            break
+    
+    # Pattern "sotto i X€" o "meno di X€" (prezzo vendita)
+    under_patterns = [
+        r'(?:sotto\s+i|sotto|meno\s+di|inferiore\s+a)\s+' + price_pattern + r'(?:\s+di\s+prezzo|\s+di\s+vendita)?',
+        r'prezzo\s+(?:di\s+)?vendita\s+(?:sotto\s+i|sotto|meno\s+di|inferiore\s+a)\s+' + price_pattern,
+    ]
+    for pattern in under_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            price = float(match.group(1).replace(',', '.'))
+            if filters['price_max'] is None or price < filters['price_max']:
+                filters['price_max'] = price
+            break
+    
+    # Pattern "sopra i X€" o "più di X€" (prezzo vendita)
+    over_patterns = [
+        r'(?:sopra\s+i|sopra|pi[ùu]\s+di|oltre|superiore\s+a)\s+' + price_pattern + r'(?:\s+di\s+prezzo|\s+di\s+vendita)?',
+        r'prezzo\s+(?:di\s+)?vendita\s+(?:sopra\s+i|sopra|pi[ùu]\s+di|oltre|superiore\s+a)\s+' + price_pattern,
+    ]
+    for pattern in over_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            price = float(match.group(1).replace(',', '.'))
+            if filters['price_min'] is None or price > filters['price_min']:
+                filters['price_min'] = price
+            break
+    
+    # Pattern "tra X e Y€" o "da X a Y€" (prezzo vendita)
+    range_patterns = [
+        r'tra\s+(?:i\s+)?' + price_pattern + r'\s+e\s+(?:i\s+)?' + price_pattern + r'(?:\s+di\s+prezzo|\s+di\s+vendita)?',
+        r'da\s+' + price_pattern + r'\s+a\s+' + price_pattern + r'(?:\s+di\s+prezzo|\s+di\s+vendita)?',
+        r'prezzo\s+(?:di\s+)?vendita\s+tra\s+(?:i\s+)?' + price_pattern + r'\s+e\s+(?:i\s+)?' + price_pattern,
+    ]
+    for pattern in range_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            price1 = float(match.group(1).replace(',', '.'))
+            price2 = float(match.group(2).replace(',', '.'))
+            filters['price_min'] = min(price1, price2)
+            filters['price_max'] = max(price1, price2)
+            break
+    
+    # Pattern simili per costo acquisto
+    # "costo intorno a X€", "costo sotto X€", ecc.
+    cost_around_patterns = [
+        r'costo\s+(?:di\s+)?acquisto\s+(?:intorno\s+a|circa|a)\s+' + price_pattern,
+        r'costo\s+(?:intorno\s+a|circa|a)\s+' + price_pattern,
+    ]
+    for pattern in cost_around_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            cost = float(match.group(1).replace(',', '.'))
+            filters['cost_around'] = cost
+            tolerance = max(cost * 0.1, 5.0)
+            filters['cost_min'] = cost - tolerance
+            filters['cost_max'] = cost + tolerance
+            break
+    
+    cost_under_patterns = [
+        r'costo\s+(?:di\s+)?acquisto\s+(?:sotto\s+i|sotto|meno\s+di)\s+' + price_pattern,
+        r'costo\s+(?:sotto\s+i|sotto|meno\s+di)\s+' + price_pattern,
+    ]
+    for pattern in cost_under_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            cost = float(match.group(1).replace(',', '.'))
+            if filters['cost_max'] is None or cost < filters['cost_max']:
+                filters['cost_max'] = cost
+            break
+    
+    cost_over_patterns = [
+        r'costo\s+(?:di\s+)?acquisto\s+(?:sopra\s+i|sopra|pi[ùu]\s+di)\s+' + price_pattern,
+        r'costo\s+(?:sopra\s+i|sopra|pi[ùu]\s+di)\s+' + price_pattern,
+    ]
+    for pattern in cost_over_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            cost = float(match.group(1).replace(',', '.'))
+            if filters['cost_min'] is None or cost > filters['cost_min']:
+                filters['cost_min'] = cost
+            break
+    
+    cost_range_patterns = [
+        r'costo\s+(?:di\s+)?acquisto\s+tra\s+(?:i\s+)?' + price_pattern + r'\s+e\s+(?:i\s+)?' + price_pattern,
+        r'costo\s+tra\s+(?:i\s+)?' + price_pattern + r'\s+e\s+(?:i\s+)?' + price_pattern,
+    ]
+    for pattern in cost_range_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            cost1 = float(match.group(1).replace(',', '.'))
+            cost2 = float(match.group(2).replace(',', '.'))
+            filters['cost_min'] = min(cost1, cost2)
+            filters['cost_max'] = max(cost1, cost2)
+            break
+    
+    return filters
+
+
+def parse_single_movement(message_text: str) -> Optional[Tuple[str, int, str, Dict[str, Optional[float]]]]:
+    """
+    Cerca un movimento singolo nel messaggio (consumo o rifornimento).
+    Estrae anche filtri di prezzo/costo se presenti.
+    
+    Returns:
+        Tuple (movement_type, quantity, wine_name, price_filters) o None
+    """
+    # Estrai filtri di prezzo prima di processare il movimento
+    price_filters = extract_price_filters(message_text)
+    
     # Prova prima i consumi
     result = parse_movement_pattern(message_text, CONSUMO_PATTERNS)
     if result:
         quantity, wine_name = result
-        return ('consumo', quantity, wine_name)
+        return ('consumo', quantity, wine_name, price_filters)
     
     # Poi i rifornimenti
     result = parse_movement_pattern(message_text, RIFORNIMENTO_PATTERNS)
     if result:
         quantity, wine_name = result
-        return ('rifornimento', quantity, wine_name)
+        return ('rifornimento', quantity, wine_name, price_filters)
     
     return None
 

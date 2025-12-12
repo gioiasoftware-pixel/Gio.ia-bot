@@ -3,17 +3,22 @@ Utility condivise per gestione movimenti inventario.
 Include fuzzy matching e gestione errori centralizzata.
 """
 import logging
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Any, Tuple, Dict
 from .database_async import async_db_manager
 
 logger = logging.getLogger(__name__)
 
 
-async def fuzzy_match_wine_name(telegram_id: int, wine_name: str, limit: int = 10) -> List[Any]:
+async def fuzzy_match_wine_name(
+    telegram_id: int, 
+    wine_name: str, 
+    limit: int = 10,
+    price_filters: Optional[Dict[str, Optional[float]]] = None
+) -> List[Any]:
     """
     Cerca vini con fuzzy matching migliorato.
     Supporta:
-    1. Ricerca normale con search_wines
+    1. Ricerca normale con search_wines (con filtri prezzo se presenti)
     2. Ricerca per primi caratteri se non trova match
     3. Fuzzy matching con rapidfuzz se disponibile
     
@@ -21,14 +26,101 @@ async def fuzzy_match_wine_name(telegram_id: int, wine_name: str, limit: int = 1
         telegram_id: ID Telegram utente
         wine_name: Nome vino da cercare
         limit: Limite risultati
+        price_filters: Dict opzionale con filtri prezzo (price_min, price_max, cost_min, cost_max, price_around, cost_around)
     
     Returns:
         Lista di vini corrispondenti
     """
-    # 1. Ricerca normale
+    # Se ci sono filtri di prezzo, usa search_wines_filtered
+    if price_filters and any(v is not None for v in price_filters.values()):
+        # Converti filtri per search_wines_filtered
+        search_filters = {}
+        
+        # Gestisci price_around (range ±10% o ±5€)
+        if price_filters.get('price_around') is not None:
+            price = price_filters['price_around']
+            tolerance = max(price * 0.1, 5.0)
+            search_filters['price_min'] = price - tolerance
+            search_filters['price_max'] = price + tolerance
+        else:
+            if price_filters.get('price_min') is not None:
+                search_filters['price_min'] = price_filters['price_min']
+            if price_filters.get('price_max') is not None:
+                search_filters['price_max'] = price_filters['price_max']
+        
+        # Gestisci cost_around
+        if price_filters.get('cost_around') is not None:
+            cost = price_filters['cost_around']
+            tolerance = max(cost * 0.1, 5.0)
+            search_filters['cost_price_min'] = cost - tolerance
+            search_filters['cost_price_max'] = cost + tolerance
+        else:
+            if price_filters.get('cost_min') is not None:
+                search_filters['cost_price_min'] = price_filters['cost_min']
+            if price_filters.get('cost_max') is not None:
+                search_filters['cost_price_max'] = price_filters['cost_max']
+        
+        # Cerca prima per nome/produttore/uvaggio con filtri prezzo
+        if wine_name:
+            # Usa search_wines_filtered con name_contains (cerca in name, producer, grape_variety)
+            search_filters['name_contains'] = wine_name
+            matching_wines = await async_db_manager.search_wines_filtered(telegram_id, search_filters, limit=limit)
+            if matching_wines:
+                logger.info(f"[FUZZY_MATCH] Trovati {len(matching_wines)} vini con filtri prezzo per '{wine_name}'")
+                return matching_wines
+            
+            # Se non trova con name_contains, prova anche con producer e grape_variety
+            # Rimuovi name_contains e aggiungi producer
+            search_filters.pop('name_contains', None)
+            search_filters['producer'] = wine_name
+            matching_wines = await async_db_manager.search_wines_filtered(telegram_id, search_filters, limit=limit)
+            if matching_wines:
+                logger.info(f"[FUZZY_MATCH] Trovati {len(matching_wines)} vini con filtri prezzo per producer '{wine_name}'")
+                return matching_wines
+    
+    # 1. Ricerca normale (senza filtri prezzo o se non ha trovato con filtri)
     matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=limit)
     
     if matching_wines:
+        # Se ci sono filtri prezzo, filtra i risultati
+        if price_filters and any(v is not None for v in price_filters.values()):
+            filtered_wines = []
+            for wine in matching_wines:
+                # Controlla price_min
+                if price_filters.get('price_min') is not None:
+                    if wine.selling_price is None or wine.selling_price < price_filters['price_min']:
+                        continue
+                # Controlla price_max
+                if price_filters.get('price_max') is not None:
+                    if wine.selling_price is None or wine.selling_price > price_filters['price_max']:
+                        continue
+                # Controlla price_around
+                if price_filters.get('price_around') is not None:
+                    price = price_filters['price_around']
+                    tolerance = max(price * 0.1, 5.0)
+                    if wine.selling_price is None or abs(wine.selling_price - price) > tolerance:
+                        continue
+                # Controlla cost_min
+                if price_filters.get('cost_min') is not None:
+                    if wine.cost_price is None or wine.cost_price < price_filters['cost_min']:
+                        continue
+                # Controlla cost_max
+                if price_filters.get('cost_max') is not None:
+                    if wine.cost_price is None or wine.cost_price > price_filters['cost_max']:
+                        continue
+                # Controlla cost_around
+                if price_filters.get('cost_around') is not None:
+                    cost = price_filters['cost_around']
+                    tolerance = max(cost * 0.1, 5.0)
+                    if wine.cost_price is None or abs(wine.cost_price - cost) > tolerance:
+                        continue
+                filtered_wines.append(wine)
+            
+            if filtered_wines:
+                logger.info(f"[FUZZY_MATCH] Filtro prezzo applicato: {len(matching_wines)} → {len(filtered_wines)} vini")
+                return filtered_wines
+            # Se filtri prezzo non hanno dato risultati, continua con ricerca normale
+        
         return matching_wines
     
     # 2. Se non trova, prova ricerca per primi caratteri

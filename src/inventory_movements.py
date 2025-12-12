@@ -205,18 +205,18 @@ class InventoryMovementManager:
         # Usa funzione centralizzata per pattern matching
         result = parse_single_movement(message_text)
         if result:
-            movement_type, quantity, wine_name = result
-            logger.info(f"Matched {movement_type} pattern -> quantity={quantity}, wine={wine_name}")
+            movement_type, quantity, wine_name, price_filters = result
+            logger.info(f"Matched {movement_type} pattern -> quantity={quantity}, wine={wine_name}, price_filters={price_filters}")
             if movement_type == 'consumo':
-                return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
+                return await self._process_consumo(update, context, telegram_id, wine_name, quantity, price_filters)
             else:
-                return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
+                return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity, price_filters)
         
         logger.debug(f"No movement pattern matched for message: {message_text}")
         return False
     
     async def _process_consumo(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
-                        telegram_id: int, wine_name: str, quantity: int) -> bool:
+                        telegram_id: int, wine_name: str, quantity: int, price_filters: Dict[str, Optional[float]] = None) -> bool:
         """Processa un consumo (quantità negativa) via processor"""
         try:
             from .processor_client import processor_client
@@ -232,8 +232,8 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
-            # Cerca tutti i vini che corrispondono al termine di ricerca
-            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=50)
+            # Cerca tutti i vini che corrispondono al termine di ricerca (con filtri prezzo se presenti)
+            matching_wines = await fuzzy_match_wine_name(telegram_id, wine_name, limit=50, price_filters=price_filters)
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:
@@ -371,7 +371,7 @@ class InventoryMovementManager:
             return True
     
     async def _process_rifornimento(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
-                             telegram_id: int, wine_name: str, quantity: int) -> bool:
+                             telegram_id: int, wine_name: str, quantity: int, price_filters: Dict[str, Optional[float]] = None) -> bool:
         """Processa un rifornimento (quantità positiva) via processor"""
         try:
             from .processor_client import processor_client
@@ -387,8 +387,8 @@ class InventoryMovementManager:
             
             business_name = user.business_name
             
-            # Cerca tutti i vini che corrispondono al termine di ricerca
-            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=50)
+            # Cerca tutti i vini che corrispondono al termine di ricerca (con filtri prezzo se presenti)
+            matching_wines = await fuzzy_match_wine_name(telegram_id, wine_name, limit=50, price_filters=price_filters)
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:

@@ -691,7 +691,7 @@ class AsyncDatabaseManager:
     async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
         """
         Ricerca con filtri multipli. Filtri supportati: region, country, producer, wine_type, classification,
-        name_contains, vintage_min, vintage_max, price_min, price_max, quantity_min, quantity_max.
+        name_contains, vintage_min, vintage_max, price_min, price_max, cost_price_min, cost_price_max, quantity_min, quantity_max.
         """
         async with await get_async_session() as session:
             user = await self.get_user_by_telegram_id(telegram_id)
@@ -730,7 +730,8 @@ class AsyncDatabaseManager:
             add_ilike("wine_type", filters.get("wine_type"))
             add_ilike("classification", filters.get("classification"))
             if filters.get("name_contains"):
-                clauses.append("name ILIKE :name_contains")
+                # Cerca in name, producer e grape_variety quando si usa name_contains
+                clauses.append("(name ILIKE :name_contains OR producer ILIKE :name_contains OR grape_variety ILIKE :name_contains)")
                 params["name_contains"] = f"%{filters['name_contains']}%"
 
             # Range numerici
@@ -746,6 +747,12 @@ class AsyncDatabaseManager:
             if filters.get("price_max") is not None:
                 clauses.append("selling_price <= :price_max")
                 params["price_max"] = float(filters["price_max"])
+            if filters.get("cost_price_min") is not None:
+                clauses.append("cost_price >= :cost_price_min")
+                params["cost_price_min"] = float(filters["cost_price_min"])
+            if filters.get("cost_price_max") is not None:
+                clauses.append("cost_price <= :cost_price_max")
+                params["cost_price_max"] = float(filters["cost_price_max"])
             if filters.get("quantity_min") is not None:
                 clauses.append("quantity >= :quantity_min")
                 params["quantity_min"] = int(filters["quantity_min"])
@@ -922,7 +929,7 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
     async def search_wines_filtered(self, telegram_id: int, filters: Dict[str, Any], limit: int = 50, offset: int = 0) -> List[Wine]:
         """
         Ricerca con filtri multipli. Filtri supportati: region, country, producer, wine_type, classification,
-        name_contains, vintage_min, vintage_max, price_min, price_max, quantity_min, quantity_max.
+        name_contains, vintage_min, vintage_max, price_min, price_max, cost_price_min, cost_price_max, quantity_min, quantity_max.
         """
         async with await get_async_session() as session:
             user = await self.get_user_by_telegram_id(telegram_id)
@@ -961,7 +968,8 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             add_ilike("wine_type", filters.get("wine_type"))
             add_ilike("classification", filters.get("classification"))
             if filters.get("name_contains"):
-                clauses.append("name ILIKE :name_contains")
+                # Cerca in name, producer e grape_variety quando si usa name_contains
+                clauses.append("(name ILIKE :name_contains OR producer ILIKE :name_contains OR grape_variety ILIKE :name_contains)")
                 params["name_contains"] = f"%{filters['name_contains']}%"
 
             # Range numerici
@@ -977,6 +985,12 @@ async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[st
             if filters.get("price_max") is not None:
                 clauses.append("selling_price <= :price_max")
                 params["price_max"] = float(filters["price_max"])
+            if filters.get("cost_price_min") is not None:
+                clauses.append("cost_price >= :cost_price_min")
+                params["cost_price_min"] = float(filters["cost_price_min"])
+            if filters.get("cost_price_max") is not None:
+                clauses.append("cost_price <= :cost_price_max")
+                params["cost_price_max"] = float(filters["cost_price_max"])
             if filters.get("quantity_min") is not None:
                 clauses.append("quantity >= :quantity_min")
                 params["quantity_min"] = int(filters["quantity_min"])
