@@ -595,7 +595,6 @@ INVENTARIO ATTUALE:
                             # Se c'è solo un vino, usa format_wine_info
                             if len(found_wines) == 1:
                                 logger.info(f"[WINE_SELECTION] Trovato 1 vino per '{wine_search_term}', mostro info dettagliata")
-                                from .response_templates import format_wine_info
                                 return format_wine_info(found_wines[0])
                             
                             # Se non è una domanda specifica, passa info all'AI nel contesto
