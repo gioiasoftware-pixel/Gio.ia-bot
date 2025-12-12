@@ -488,14 +488,9 @@ async def _handle_sensory_query(telegram_id: int, prompt: str) -> Optional[str]:
             if not unique_results:
                 return f"❌ Non ho trovato vini {config['description']} nel tuo inventario. 💡 Prova ad aggiungere descrizioni dettagliate ai tuoi vini per ottenere risultati migliori."
             
-            # 5. FORMATTA RISPOSTA COLLOQUIALE
-            if len(unique_results) == 1:
-                return f"🍷 Il vino più {config['description']} che hai è:\n\n{format_wine_info(unique_results[0])}"
-            else:
-                from .response_templates import format_inventory_list
-                response = f"🍷 **I vini più {config['description']}** nel tuo inventario:\n\n"
-                response += format_inventory_list(unique_results, limit=10)
-                return response
+            # 5. FORMATTA RISPOSTA COLLOQUIALE usando format_wines_response_by_count
+            query_context = f"più {config['description']}"
+            return await format_wines_response_by_count(unique_results, telegram_id, query_context)
         
     except Exception as e:
         logger.error(f"Errore in _handle_sensory_query: {e}", exc_info=True)
@@ -647,46 +642,73 @@ async def _handle_informational_query(telegram_id: int, query_type: str, field: 
             
             query_desc = query_names.get(query_type, {}).get(field, field)
             
-            # Se c'è un solo vino, mostra scheda info completa
-            if len(wines) == 1:
-                wine_info = format_wine_info(wines[0])
-                header = f"🍷 **Vino con {query_desc}:**\n\n"
-                return header + wine_info
-            
-            # Se ci sono più vini, mostra elenco con pulsanti
-            # Formatta valore per display
-            if field in ('selling_price', 'cost_price'):
-                value_display = f"€{target_value:.2f}"
-            elif field == 'quantity':
-                value_display = f"{int(target_value)} bottiglie"
-            elif field == 'vintage':
-                value_display = str(int(target_value))
-            else:
-                value_display = str(target_value)
-            
-            field_display = field_names.get(field, field)
-            header = f"🍷 **Vini con {query_desc} ({field_display}: {value_display}):**\n\n"
-            
-            # Elenco vini
-            wine_list = []
-            for idx, wine in enumerate(wines, start=1):
-                name = wine.name or "Senza nome"
-                producer = f" ({wine.producer})" if wine.producer else ""
-                vintage = f" {wine.vintage}" if wine.vintage else ""
-                qty = f" — {wine.quantity} bott." if wine.quantity is not None else ""
-                wine_list.append(f"{idx}. {name}{producer}{vintage}{qty}")
-            
-            wine_list_text = "\n".join(wine_list)
-            
-            # Crea marker per pulsanti selezione
-            wine_ids = [str(w.id) for w in wines[:10]]  # Max 10 bottoni
-            buttons_marker = f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
-            
-            return header + wine_list_text + "\n\n" + buttons_marker
+            # Usa format_wines_response_by_count per gestire i 3 casi
+            query_context = f"con {query_desc}"
+            return await format_wines_response_by_count(wines, telegram_id, query_context)
             
     except Exception as e:
         logger.error(f"[INFORMATIONAL_QUERY] Errore gestione query informativa: {e}", exc_info=True)
         return None
+
+
+async def format_wines_response_by_count(wines: list, telegram_id: int = None, query_context: str = "") -> str:
+    """
+    Formatta risposta in base al numero di vini trovati:
+    - 1 vino: info message completo
+    - 2-10 vini: sommario + pulsanti selezione
+    - >10 vini: messaggio informativo + link al viewer
+    
+    Args:
+        wines: Lista di vini trovati
+        telegram_id: ID Telegram per generare link viewer (opzionale, richiesto se >10 vini)
+        query_context: Contesto opzionale per personalizzare il messaggio (es. "più tannici")
+    
+    Returns:
+        Stringa formattata con marker appropriati
+    """
+    if not wines:
+        from .response_templates import format_search_no_results
+        return format_search_no_results({})
+    
+    num_wines = len(wines)
+    
+    # Caso 1: 1 solo vino → info message completo
+    if num_wines == 1:
+        return format_wine_info(wines[0])
+    
+    # Caso 2: 2-10 vini → sommario + pulsanti selezione
+    if 2 <= num_wines <= 10:
+        summary = format_inventory_list(wines, limit=num_wines)
+        wine_ids = [str(w.id) for w in wines[:10]]
+        buttons_marker = f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+        return summary + "\n\n" + buttons_marker
+    
+    # Caso 3: >10 vini → messaggio informativo + link al viewer
+    if num_wines > 10:
+        # Genera link al viewer se telegram_id disponibile
+        viewer_link_text = ""
+        if telegram_id:
+            try:
+                from .viewer_utils import generate_viewer_token, get_viewer_url
+                
+                user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                if user and user.business_name:
+                    token = generate_viewer_token(telegram_id, user.business_name)
+                    if token:
+                        viewer_url = get_viewer_url(token)
+                        viewer_link_text = f"\n\n🔗 [Clicca qui per vedere tutto l'inventario]({viewer_url})"
+            except Exception as e:
+                logger.warning(f"Errore generazione link viewer: {e}")
+        
+        context_text = f" {query_context}" if query_context else ""
+        return (
+            f"🍷 **Hai tanti vini{context_text}!**\n\n"
+            f"Ho trovato **{num_wines} vini** che corrispondono alla tua ricerca.\n\n"
+            f"💡 Per vedere tutti i vini e filtrare facilmente, usa il link qui sotto:{viewer_link_text}"
+        )
+    
+    # Fallback: usa format_inventory_list normale
+    return format_inventory_list(wines, limit=50)
 
 
 async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> str:
@@ -1274,17 +1296,9 @@ INVENTARIO ATTUALE:
                                 logger.info(f"[FORMATTED] Risposta pre-formattata generata per domanda specifica")
                                 return formatted_response
                             
-                            # Se ci sono più corrispondenze, mostra bottoni per selezione
-                            if len(found_wines) > 1:
-                                logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}', mostro bottoni per selezione")
-                                # Restituisci marker per mostrare bottoni inline
-                                wine_ids = [str(w.id) for w in found_wines[:10]]  # Max 10 bottoni
-                                return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
-                            
-                            # Se c'è solo un vino, usa format_wine_info
-                            if len(found_wines) == 1:
-                                logger.info(f"[WINE_SELECTION] Trovato 1 vino per '{wine_search_term}', mostro info dettagliata")
-                                return format_wine_info(found_wines[0])
+                            # Usa format_wines_response_by_count per gestire automaticamente 1/multi/10+ vini
+                            logger.info(f"[WINE_SELECTION] Trovati {len(found_wines)} vini per '{wine_search_term}'")
+                            return await format_wines_response_by_count(found_wines, telegram_id)
                             
                             # Se non è una domanda specifica, passa info all'AI nel contesto
                             specific_wine_info = "\n\nVINI TROVATI NEL DATABASE PER LA RICERCA:\n"
@@ -1831,28 +1845,20 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=50)
                 if wines:
-                    # Se ci sono più vini, mostra bottoni per selezione
-                    if len(wines) > 1:
-                        logger.info(f"[GET_WINE_PRICE] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
-                        wine_ids = [str(w.id) for w in wines[:10]]
-                        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
-                    return format_wine_price(wines[0])
+                    logger.info(f"[GET_WINE_PRICE] Trovati {len(wines)} vini per '{query}'")
+                    return await format_wines_response_by_count(wines, telegram_id)
                 return format_wine_not_found(query)
 
             if name == "get_wine_quantity":
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=50)
                 if wines:
-                    # Se ci sono più vini, mostra bottoni per selezione
-                    if len(wines) > 1:
-                        logger.info(f"[GET_WINE_QUANTITY] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
-                        wine_ids = [str(w.id) for w in wines[:10]]
-                        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
-                    return format_wine_quantity(wines[0])
+                    logger.info(f"[GET_WINE_QUANTITY] Trovati {len(wines)} vini per '{query}'")
+                    return await format_wines_response_by_count(wines, telegram_id)
                 return format_wine_not_found(query)
 
             if name == "search_wines":
@@ -1868,7 +1874,8 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 wines = await async_db_manager.search_wines_filtered(telegram_id, merged_filters, limit=limit)
                 
                 if wines:
-                    return format_inventory_list(wines, limit=limit)
+                    # Usa format_wines_response_by_count per gestire automaticamente i casi
+                    return await format_wines_response_by_count(wines, telegram_id)
                 return format_search_no_results(merged_filters)
 
             if name == "get_inventory_stats":

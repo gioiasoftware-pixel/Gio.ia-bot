@@ -309,6 +309,67 @@ def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_wines_response_by_count_sync(wines: list) -> str:
+    """
+    Formatta risposta in base al numero di vini trovati:
+    - 1 vino: info message completo
+    - 2-10 vini: sommario + pulsanti selezione
+    - >10 vini: messaggio informativo + link al viewer
+    
+    Args:
+        wines: Lista di vini trovati
+        telegram_id: ID Telegram per generare link viewer (opzionale, richiesto se >10 vini)
+        query_context: Contesto opzionale per personalizzare il messaggio (es. "più tannici")
+    
+    Returns:
+        Stringa formattata con marker appropriati
+    """
+    if not wines:
+        return format_search_no_results({})
+    
+    num_wines = len(wines)
+    
+    # Caso 1: 1 solo vino → info message completo
+    if num_wines == 1:
+        return format_wine_info(wines[0])
+    
+    # Caso 2: 2-10 vini → sommario + pulsanti selezione
+    if 2 <= num_wines <= 10:
+        summary = format_inventory_list(wines, limit=num_wines)
+        wine_ids = [str(w.id) for w in wines[:10]]
+        buttons_marker = f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+        return summary + "\n\n" + buttons_marker
+    
+    # Caso 3: >10 vini → messaggio informativo + link al viewer
+    if num_wines > 10:
+        # Genera link al viewer se telegram_id disponibile
+        viewer_link_text = ""
+        if telegram_id:
+            try:
+                from .viewer_utils import generate_viewer_token, get_viewer_url
+                from .database_async import async_db_manager
+                
+                user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+                if user and user.business_name:
+                    token = generate_viewer_token(telegram_id, user.business_name)
+                    if token:
+                        viewer_url = get_viewer_url(token)
+                        viewer_link_text = f"\n\n🔗 [Clicca qui per vedere tutto l'inventario]({viewer_url})"
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Errore generazione link viewer: {e}")
+        
+        context_text = f" di questo tipo" if query_context else ""
+        return (
+            f"🍷 **Hai tanti vini{context_text}!**\n\n"
+            f"Ho trovato **{num_wines} vini** che corrispondono alla tua ricerca.\n\n"
+            f"💡 Per vedere tutti i vini e filtrare facilmente, usa il link qui sotto:{viewer_link_text}"
+        )
+    
+    return format_inventory_list(wines, limit=50)
+
+
 def format_search_no_results(filters: Dict[str, Any]) -> str:
     """
     Template quando una ricerca filtrata non trova risultati.
