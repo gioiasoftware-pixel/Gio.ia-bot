@@ -338,18 +338,29 @@ async def chat_handler(update, context):
                         message = f"🔍 **Ho trovato {len(selected_wines)} vini che corrispondono alla tua ricerca**\n\n"
                         message += "Seleziona quale vuoi vedere:\n\n"
                         
-                        # Crea bottoni inline
+                        # Crea bottoni inline organizzati su più colonne
                         keyboard = []
-                        for wine in selected_wines[:10]:  # Max 10 bottoni
-                            wine_display = wine.name
-                            if wine.producer:
-                                wine_display += f" ({wine.producer})"
-                            if wine.vintage:
-                                wine_display += f" {wine.vintage}"
-                            
-                            # Callback data: wine_info:{wine_id}
-                            callback_data = f"wine_info:{wine.id}"
-                            keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                        buttons_per_row = 2  # 2 pulsanti per riga per migliore leggibilità
+                        
+                        for i in range(0, len(selected_wines), buttons_per_row):
+                            row = []
+                            for j in range(buttons_per_row):
+                                if i + j < len(selected_wines):
+                                    wine = selected_wines[i + j]
+                                    wine_display = wine.name
+                                    if wine.producer:
+                                        wine_display += f" ({wine.producer})"
+                                    if wine.vintage:
+                                        wine_display += f" {wine.vintage}"
+                                    
+                                    # Limita lunghezza testo pulsante per evitare problemi Telegram
+                                    if len(wine_display) > 30:
+                                        wine_display = wine_display[:27] + "..."
+                                    
+                                    # Callback data: wine_info:{wine_id}
+                                    callback_data = f"wine_info:{wine.id}"
+                                    row.append(InlineKeyboardButton(wine_display, callback_data=callback_data))
+                            keyboard.append(row)
                         
                         reply_markup = InlineKeyboardMarkup(keyboard)
                         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
@@ -1019,7 +1030,7 @@ async def callback_handler(update, context):
                 logger.warning(f"Errore invio notifica admin: {notif_error}")
             
             return
-    
+
     # Gestisci callback inventario - ASYNC
     if await inventory_manager.handle_wine_callback(update, context):
         return

@@ -189,25 +189,36 @@ class InventoryMovementManager:
             business_name = user.business_name
             
             # Cerca tutti i vini che corrispondono al termine di ricerca
-            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
+            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=50)
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:
                 message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
                 message += "Quale tra questi intendi?\n\n"
                 
-                # Crea pulsanti inline con i nomi completi dei vini
+                # Crea pulsanti inline con i nomi completi dei vini organizzati su più colonne
                 keyboard = []
-                for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
-                    wine_display = wine.name
-                    if wine.producer:
-                        wine_display += f" ({wine.producer})"
-                    if wine.vintage:
-                        wine_display += f" {wine.vintage}"
-                    
-                    # Callback data: movimento_consumo:{wine_id}:{quantity}
-                    callback_data = f"movimento_consumo:{wine.id}:{quantity}"
-                    keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                buttons_per_row = 2  # 2 pulsanti per riga per migliore leggibilità
+                
+                for i in range(0, len(matching_wines), buttons_per_row):
+                    row = []
+                    for j in range(buttons_per_row):
+                        if i + j < len(matching_wines):
+                            wine = matching_wines[i + j]
+                            wine_display = wine.name
+                            if wine.producer:
+                                wine_display += f" ({wine.producer})"
+                            if wine.vintage:
+                                wine_display += f" {wine.vintage}"
+                            
+                            # Limita lunghezza testo pulsante per evitare problemi Telegram
+                            if len(wine_display) > 30:
+                                wine_display = wine_display[:27] + "..."
+                            
+                            # Callback data: movimento_consumo:{wine_id}:{quantity}
+                            callback_data = f"movimento_consumo:{wine.id}:{quantity}"
+                            row.append(InlineKeyboardButton(wine_display, callback_data=callback_data))
+                    keyboard.append(row)
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
@@ -329,25 +340,36 @@ class InventoryMovementManager:
             business_name = user.business_name
             
             # Cerca tutti i vini che corrispondono al termine di ricerca
-            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
+            matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=50)
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:
                 message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
                 message += "Quale tra questi intendi?\n\n"
                 
-                # Crea pulsanti inline con i nomi completi dei vini
+                # Crea pulsanti inline con i nomi completi dei vini organizzati su più colonne
                 keyboard = []
-                for wine in matching_wines[:5]:  # Max 5 per evitare troppi pulsanti
-                    wine_display = wine.name
-                    if wine.producer:
-                        wine_display += f" ({wine.producer})"
-                    if wine.vintage:
-                        wine_display += f" {wine.vintage}"
-                    
-                    # Callback data: movimento_rifornimento:{wine_id}:{quantity}
-                    callback_data = f"movimento_rifornimento:{wine.id}:{quantity}"
-                    keyboard.append([InlineKeyboardButton(wine_display, callback_data=callback_data)])
+                buttons_per_row = 2  # 2 pulsanti per riga per migliore leggibilità
+                
+                for i in range(0, len(matching_wines), buttons_per_row):
+                    row = []
+                    for j in range(buttons_per_row):
+                        if i + j < len(matching_wines):
+                            wine = matching_wines[i + j]
+                            wine_display = wine.name
+                            if wine.producer:
+                                wine_display += f" ({wine.producer})"
+                            if wine.vintage:
+                                wine_display += f" {wine.vintage}"
+                            
+                            # Limita lunghezza testo pulsante per evitare problemi Telegram
+                            if len(wine_display) > 30:
+                                wine_display = wine_display[:27] + "..."
+                            
+                            # Callback data: movimento_rifornimento:{wine_id}:{quantity}
+                            callback_data = f"movimento_rifornimento:{wine.id}:{quantity}"
+                            row.append(InlineKeyboardButton(wine_display, callback_data=callback_data))
+                    keyboard.append(row)
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
