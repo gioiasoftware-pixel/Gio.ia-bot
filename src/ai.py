@@ -864,9 +864,21 @@ Esempi:
         
         result = json.loads(json_text)
         
-        # ✅ VALIDAZIONE OUTPUT LLM con Pydantic
-        from .ai_validation import validate_movement_result
-        validated = validate_movement_result(result)
+        # ✅ VALIDAZIONE OUTPUT LLM con Pydantic (gestione graceful se modulo mancante)
+        validated = None
+        try:
+            from .ai_validation import validate_movement_result
+            validated = validate_movement_result(result)
+        except ImportError:
+            logger.warning("[AI-MOVEMENT] Modulo ai_validation non disponibile, uso validazione base")
+            # Validazione base senza Pydantic
+            if isinstance(result, dict) and result.get("is_movement") and result.get("type") and result.get("quantity") and result.get("wine_name"):
+                validated = type('ValidatedResult', (), {
+                    'is_movement': True,
+                    'type': result.get("type"),
+                    'quantity': result.get("quantity"),
+                    'wine_name': result.get("wine_name")
+                })()
         
         if validated and validated.is_movement and validated.type and validated.quantity and validated.wine_name:
             movement_type = validated.type
@@ -1801,7 +1813,7 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
 
             logger.info(f"[TOOLS] AI ha richiesto tool: {name} args={args}")
 
-            # ✅ USA FUNCTION EXECUTOR (centralizzato)
+            # ✅ USA FUNCTION EXECUTOR (centralizzato) - gestione graceful se modulo mancante
             try:
                 from .function_executor import FunctionExecutor
                 
@@ -1824,12 +1836,11 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 
             except ImportError:
                 # FunctionExecutor non disponibile, usa fallback inline (compatibilità)
-                logger.warning(f"[TOOLS] FunctionExecutor non disponibile, usando fallback inline")
-                pass
+                logger.debug(f"[TOOLS] FunctionExecutor non disponibile, usando fallback inline per tool '{name}'")
+                # Passa al fallback inline
             except Exception as e:
-                logger.error(f"[TOOLS] Errore FunctionExecutor: {e}", exc_info=True)
+                logger.error(f"[TOOLS] Errore FunctionExecutor per tool '{name}': {e}", exc_info=True)
                 # Fallback a logica inline
-                pass
             
             # ✅ FALLBACK: Implementazioni tool inline (per compatibilità)
             if name == "get_inventory_list":

@@ -13,9 +13,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Filtra i log httpx/httpcore: mostra solo ERROR
-for _lib in ("httpx", "httpcore"):
-    logging.getLogger(_lib).addFilter(lambda r: r.levelno >= logging.ERROR)
+# Filtra i log httpx/httpcore: mostra solo ERROR (fix: lambda con closure corretta)
+def create_error_filter():
+    """Crea filtro per log ERROR"""
+    return lambda r: r.levelno >= logging.ERROR
+
+for lib_name in ("httpx", "httpcore"):
+    logging.getLogger(lib_name).addFilter(create_error_filter())
 
 # Database disponibile verificato dinamicamente in chat_handler
 DATABASE_AVAILABLE = True  # Verificato con async_db_manager
