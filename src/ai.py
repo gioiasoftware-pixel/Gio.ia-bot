@@ -1079,8 +1079,15 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                # Cerca con limit più alto per vedere se ci sono più corrispondenze
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
                 if wines:
+                    # Se ci sono più vini, mostra bottoni per selezione
+                    if len(wines) > 1:
+                        logger.info(f"[GET_WINE_INFO] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
+                        wine_ids = [str(w.id) for w in wines[:10]]  # Max 10 bottoni
+                        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
+                    # Se c'è solo un vino, mostra info dettagliata
                     return format_wine_info(wines[0])
                 return format_wine_not_found(query)
 
@@ -1088,8 +1095,13 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
                 if wines:
+                    # Se ci sono più vini, mostra bottoni per selezione
+                    if len(wines) > 1:
+                        logger.info(f"[GET_WINE_PRICE] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
+                        wine_ids = [str(w.id) for w in wines[:10]]
+                        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
                     return format_wine_price(wines[0])
                 return format_wine_not_found(query)
 
@@ -1097,8 +1109,13 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=1)
+                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
                 if wines:
+                    # Se ci sono più vini, mostra bottoni per selezione
+                    if len(wines) > 1:
+                        logger.info(f"[GET_WINE_QUANTITY] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
+                        wine_ids = [str(w.id) for w in wines[:10]]
+                        return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
                     return format_wine_quantity(wines[0])
                 return format_wine_not_found(query)
 
