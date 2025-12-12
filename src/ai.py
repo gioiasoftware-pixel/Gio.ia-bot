@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import asyncio
+from typing import Optional
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database_async import async_db_manager
@@ -149,6 +150,221 @@ def _is_movement_summary_request(prompt: str) -> bool:
         r"\briepilogo\s+(consumi|movimenti)\b",
     ]
     return any(re.search(pt, p) for pt in patterns)
+
+
+def _is_informational_query(prompt: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Riconosce domande informative generiche sul vino.
+    Ritorna (query_type, field) dove:
+    - query_type: 'min' o 'max'
+    - field: 'quantity', 'selling_price', 'cost_price', 'vintage'
+    
+    Esempi:
+    - "quale vino ha meno quantità" → ('min', 'quantity')
+    - "quale è il più costoso" → ('max', 'selling_price')
+    - "quale ha più bottiglie" → ('max', 'quantity')
+    """
+    p = prompt.lower().strip()
+    
+    # Pattern per quantità (min)
+    min_quantity_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:ha|con)\s+(?:meno|minore|minima)\s+(?:quantit[àa]|bottiglie)",
+        r"quale\s+è\s+il\s+(?:vino|bottiglia)\s+(?:con|che\s+ha)\s+(?:meno|minore|minima)\s+(?:quantit[àa]|bottiglie)",
+        r"(?:vino|bottiglia)\s+(?:con|che\s+ha)\s+(?:meno|minore|minima)\s+(?:quantit[àa]|bottiglie)",
+        r"(?:meno|minore|minima)\s+(?:quantit[àa]|bottiglie)",
+    ]
+    
+    # Pattern per quantità (max)
+    max_quantity_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:ha|con)\s+(?:pi[ùu]|maggiore|massima)\s+(?:quantit[àa]|bottiglie)",
+        r"quale\s+è\s+il\s+(?:vino|bottiglia)\s+(?:con|che\s+ha)\s+(?:pi[ùu]|maggiore|massima)\s+(?:quantit[àa]|bottiglie)",
+        r"(?:vino|bottiglia)\s+(?:con|che\s+ha)\s+(?:pi[ùu]|maggiore|massima)\s+(?:quantit[àa]|bottiglie)",
+        r"(?:pi[ùu]|maggiore|massima)\s+(?:quantit[àa]|bottiglie)",
+    ]
+    
+    # Pattern per prezzo vendita (max - più costoso)
+    max_price_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?costos[oa]",
+        r"quale\s+è\s+il\s+(?:vino|bottiglia)\s+(?:pi[ùu]\s+)?costos[oa]",
+        r"(?:vino|bottiglia)\s+(?:pi[ùu]\s+)?costos[oa]",
+        r"quale\s+(?:vino|bottiglia)\s+costa\s+di\s+pi[ùu]",
+        r"quale\s+(?:vino|bottiglia)\s+ha\s+il\s+prezzo\s+(?:pi[ùu]\s+)?alto",
+        r"(?:pi[ùu]\s+)?costos[oa]",
+    ]
+    
+    # Pattern per prezzo vendita (min - più economico)
+    min_price_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?economic[oa]",
+        r"quale\s+è\s+il\s+(?:vino|bottiglia)\s+(?:pi[ùu]\s+)?economic[oa]",
+        r"(?:vino|bottiglia)\s+(?:pi[ùu]\s+)?economic[oa]",
+        r"quale\s+(?:vino|bottiglia)\s+costa\s+di\s+meno",
+        r"quale\s+(?:vino|bottiglia)\s+ha\s+il\s+prezzo\s+(?:pi[ùu]\s+)?basso",
+        r"(?:pi[ùu]\s+)?economic[oa]",
+    ]
+    
+    # Pattern per prezzo acquisto (max)
+    max_cost_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?costos[oa]\s+(?:da\s+)?acquist[oa]",
+        r"quale\s+(?:vino|bottiglia)\s+ho\s+pagato\s+di\s+pi[ùu]",
+        r"(?:prezzo|costo)\s+acquisto\s+(?:pi[ùu]\s+)?alto",
+    ]
+    
+    # Pattern per prezzo acquisto (min)
+    min_cost_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?economic[oa]\s+(?:da\s+)?acquist[oa]",
+        r"quale\s+(?:vino|bottiglia)\s+ho\s+pagato\s+di\s+meno",
+        r"(?:prezzo|costo)\s+acquisto\s+(?:pi[ùu]\s+)?basso",
+    ]
+    
+    # Pattern per annata (max - più recente)
+    max_vintage_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?recente",
+        r"quale\s+(?:vino|bottiglia)\s+(?:ha|con)\s+(?:annata|anno)\s+(?:pi[ùu]\s+)?recente",
+        r"(?:annata|anno)\s+(?:pi[ùu]\s+)?recente",
+    ]
+    
+    # Pattern per annata (min - più vecchio)
+    min_vintage_patterns = [
+        r"quale\s+(?:vino|bottiglia)\s+(?:è|è\s+il)\s+(?:pi[ùu]\s+)?vecchi[oa]",
+        r"quale\s+(?:vino|bottiglia)\s+(?:ha|con)\s+(?:annata|anno)\s+(?:pi[ùu]\s+)?vecchi[oa]",
+        r"(?:annata|anno)\s+(?:pi[ùu]\s+)?vecchi[oa]",
+    ]
+    
+    # Controlla pattern
+    if any(re.search(pt, p) for pt in min_quantity_patterns):
+        return ('min', 'quantity')
+    if any(re.search(pt, p) for pt in max_quantity_patterns):
+        return ('max', 'quantity')
+    if any(re.search(pt, p) for pt in max_price_patterns):
+        return ('max', 'selling_price')
+    if any(re.search(pt, p) for pt in min_price_patterns):
+        return ('min', 'selling_price')
+    if any(re.search(pt, p) for pt in max_cost_patterns):
+        return ('max', 'cost_price')
+    if any(re.search(pt, p) for pt in min_cost_patterns):
+        return ('min', 'cost_price')
+    if any(re.search(pt, p) for pt in max_vintage_patterns):
+        return ('max', 'vintage')
+    if any(re.search(pt, p) for pt in min_vintage_patterns):
+        return ('min', 'vintage')
+    
+    return (None, None)
+
+
+async def _handle_informational_query(telegram_id: int, query_type: str, field: str) -> Optional[str]:
+    """
+    Gestisce una domanda informativa generica e ritorna la risposta formattata.
+    
+    Args:
+        telegram_id: ID Telegram utente
+        query_type: 'min' o 'max'
+        field: Campo da interrogare ('quantity', 'selling_price', 'cost_price', 'vintage')
+    
+    Returns:
+        Risposta formattata o None se errore
+    """
+    try:
+        from .database_async import async_db_manager
+        from .response_templates import format_wine_info
+        
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        if not user or not user.business_name:
+            return None
+        
+        table_name = f'"{telegram_id}/{user.business_name} INVENTARIO"'
+        
+        # Determina ORDER BY e NULLS LAST/FIRST
+        if query_type == 'max':
+            order_by = f"{field} DESC NULLS LAST"
+            if field == 'vintage':
+                # Per vintage, NULL va alla fine (vini senza annata)
+                order_by = f"{field} DESC NULLS LAST"
+        else:  # min
+            order_by = f"{field} ASC NULLS LAST"
+            if field == 'vintage':
+                # Per vintage, NULL va alla fine (vini senza annata)
+                order_by = f"{field} ASC NULLS LAST"
+        
+        # Query SQL per trovare il vino
+        from sqlalchemy import text as sql_text
+        from .database_async import get_async_session
+        query = sql_text(f"""
+            SELECT *
+            FROM {table_name}
+            WHERE user_id = :user_id
+            AND {field} IS NOT NULL
+            ORDER BY {order_by}
+            LIMIT 1
+        """)
+        
+        async with await get_async_session() as session:
+            result = await session.execute(query, {"user_id": user.id})
+            row = result.fetchone()
+            
+            if not row:
+                # Nessun vino trovato con quel campo valorizzato
+                field_names = {
+                    'quantity': 'quantità',
+                    'selling_price': 'prezzo di vendita',
+                    'cost_price': 'prezzo di acquisto',
+                    'vintage': 'annata'
+                }
+                field_name = field_names.get(field, field)
+                return f"❌ Non ho trovato vini con {field_name} specificato nel tuo inventario."
+            
+            # Costruisci oggetto Wine
+            from .database_async import Wine
+            wine_dict = {
+                'id': row.id,
+                'user_id': row.user_id,
+                'name': row.name,
+                'producer': row.producer,
+                'vintage': row.vintage,
+                'grape_variety': row.grape_variety,
+                'region': row.region,
+                'country': row.country,
+                'wine_type': row.wine_type,
+                'classification': row.classification,
+                'quantity': row.quantity,
+                'min_quantity': row.min_quantity if hasattr(row, 'min_quantity') else 0,
+                'cost_price': row.cost_price,
+                'selling_price': row.selling_price,
+                'alcohol_content': row.alcohol_content,
+                'description': row.description,
+                'notes': row.notes,
+                'created_at': row.created_at,
+                'updated_at': row.updated_at
+            }
+            
+            wine = Wine()
+            for key, value in wine_dict.items():
+                setattr(wine, key, value)
+            
+            # Formatta risposta
+            wine_info = format_wine_info(wine)
+            
+            # Aggiungi contesto alla risposta
+            field_names = {
+                'quantity': 'quantità',
+                'selling_price': 'prezzo di vendita',
+                'cost_price': 'prezzo di acquisto',
+                'vintage': 'annata'
+            }
+            query_names = {
+                'min': {'quantity': 'minore quantità', 'selling_price': 'prezzo più basso', 
+                       'cost_price': 'costo acquisto più basso', 'vintage': 'annata più vecchia'},
+                'max': {'quantity': 'maggiore quantità', 'selling_price': 'prezzo più alto',
+                       'cost_price': 'costo acquisto più alto', 'vintage': 'annata più recente'}
+            }
+            
+            query_desc = query_names.get(query_type, {}).get(field, field)
+            header = f"🍷 **Vino con {query_desc}:**\n\n"
+            
+            return header + wine_info
+            
+    except Exception as e:
+        logger.error(f"[INFORMATIONAL_QUERY] Errore gestione query informativa: {e}", exc_info=True)
+        return None
 
 
 async def _build_inventory_list_response(telegram_id: int, limit: int = 50) -> str:
@@ -672,6 +888,15 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
         # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker)
         if _is_movement_summary_request(prompt):
             return "[[ASK_MOVES_PERIOD]]"
+        
+        # Richieste informative generiche (quale vino ha meno quantità, quale è il più costoso, ecc.)
+        query_type, field = _is_informational_query(prompt)
+        if query_type and field:
+            logger.info(f"[INFORMATIONAL_QUERY] Rilevata query informativa: {query_type} {field}")
+            response = await _handle_informational_query(telegram_id, query_type, field)
+            if response:
+                return response
+            # Se errore, continua con AI normale
 
         movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
