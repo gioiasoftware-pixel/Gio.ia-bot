@@ -95,11 +95,80 @@ class InventoryMovementManager:
             number_pattern + r' bottiglie? di (.+) aggiunte?'
         ]
     
+    def _parse_multiple_movements(self, message_text: str, movement_type: str) -> List[Tuple[int, str]]:
+        """
+        Analizza un messaggio per trovare movimenti multipli.
+        Esempio: "ho consumato 1 etna e 1 fiano" -> [(1, "etna"), (1, "fiano")]
+        
+        Returns:
+            Lista di tuple (quantity, wine_name)
+        """
+        movements = []
+        number_pattern = r'(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)'
+        
+        # Pattern per riconoscere il prefisso del movimento (es. "ho consumato", "consumato", ecc.)
+        if movement_type == 'consumo':
+            prefix_patterns = [
+                r'ho venduto|ho consumato|ho bevuto|venduto|consumato|bevuto',
+                r'ho venduto|ho consumato|ho bevuto'
+            ]
+        else:
+            prefix_patterns = [
+                r'ho ricevuto|ho comprato|ho aggiunto|ricevuto|comprato|aggiunto',
+                r'ho ricevuto|ho comprato|ho aggiunto'
+            ]
+        
+        # Cerca il prefisso del movimento
+        prefix_match = None
+        for prefix_pattern in prefix_patterns:
+            prefix_match = re.search(prefix_pattern, message_text, re.IGNORECASE)
+            if prefix_match:
+                break
+        
+        if not prefix_match:
+            return movements
+        
+        # Estrai la parte dopo il prefisso
+        prefix_end = prefix_match.end()
+        rest_of_message = message_text[prefix_end:].strip()
+        
+        # Pattern per riconoscere "X vino" o "X bottiglie di vino"
+        # Supporta anche "e" come separatore: "1 etna e 1 fiano"
+        wine_pattern = rf'{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?)(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*'
+        
+        # Cerca tutti i movimenti usando un approccio più semplice: split per " e " dopo il prefisso
+        # Pattern: numero + (bottiglie di)? + nome vino
+        parts = re.split(r'\s+e\s+', rest_of_message)
+        
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            # Cerca pattern: numero + (bottiglie di)? + nome vino
+            match = re.match(rf'^{number_pattern}\s+(?:bottiglie?\s+di\s+)?(.+)$', part, re.IGNORECASE)
+            if match:
+                quantity_str = match.group(1).strip()
+                wine_name = match.group(2).strip()
+                
+                # Converti quantità
+                if quantity_str.isdigit():
+                    quantity = int(quantity_str)
+                else:
+                    quantity = word_to_number(quantity_str)
+                    if quantity is None:
+                        continue
+                
+                movements.append((quantity, wine_name))
+        
+        return movements
+    
     async def process_movement_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Processa un messaggio per riconoscere movimenti inventario"""
         user = update.effective_user
         telegram_id = user.id
         message_text = update.message.text.lower().strip()
+        original_message = update.message.text.strip()  # Mantieni originale per context
         
         logger.info(f"[MOVEMENT] Checking movement patterns for message: {message_text}")
         
@@ -130,7 +199,34 @@ class InventoryMovementManager:
             )
             logger.info(f"[MOVEMENT] Onboarding completato automaticamente per {telegram_id} (business_name={user_db.business_name}, {len(user_wines)} vini)")
         
-        # Cerca pattern di consumo
+        # Prima prova a riconoscere movimenti multipli
+        multiple_consumi = self._parse_multiple_movements(message_text, 'consumo')
+        multiple_rifornimenti = self._parse_multiple_movements(message_text, 'rifornimento')
+        
+        # Se ci sono movimenti multipli, gestiscili
+        if len(multiple_consumi) > 1:
+            logger.info(f"[MOVEMENT] Rilevati {len(multiple_consumi)} movimenti consumo multipli: {multiple_consumi}")
+            # Salva i movimenti multipli nel context per processarli sequenzialmente
+            context.user_data['pending_movements'] = [
+                {'type': 'consumo', 'quantity': qty, 'wine_name': wine} 
+                for qty, wine in multiple_consumi
+            ]
+            context.user_data['original_message'] = original_message
+            # Processa il primo movimento (gli altri verranno processati dopo la selezione)
+            return await self._process_consumo(update, context, telegram_id, multiple_consumi[0][1], multiple_consumi[0][0])
+        
+        if len(multiple_rifornimenti) > 1:
+            logger.info(f"[MOVEMENT] Rilevati {len(multiple_rifornimenti)} movimenti rifornimento multipli: {multiple_rifornimenti}")
+            # Salva i movimenti multipli nel context per processarli sequenzialmente
+            context.user_data['pending_movements'] = [
+                {'type': 'rifornimento', 'quantity': qty, 'wine_name': wine} 
+                for qty, wine in multiple_rifornimenti
+            ]
+            context.user_data['original_message'] = original_message
+            # Processa il primo movimento (gli altri verranno processati dopo la selezione)
+            return await self._process_rifornimento(update, context, telegram_id, multiple_rifornimenti[0][1], multiple_rifornimenti[0][0])
+        
+        # Cerca pattern di consumo singolo
         for pattern in self.consumo_patterns:
             match = re.search(pattern, message_text, re.IGNORECASE)
             if match:
@@ -149,7 +245,7 @@ class InventoryMovementManager:
                 logger.info(f"Matched consumo pattern: '{pattern}' -> quantity={quantity} (from '{quantity_str}'), wine={wine_name}")
                 return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
         
-        # Cerca pattern di rifornimento
+        # Cerca pattern di rifornimento singolo
         for pattern in self.rifornimento_patterns:
             match = re.search(pattern, message_text, re.IGNORECASE)
             if match:
@@ -743,6 +839,7 @@ class InventoryMovementManager:
                                              wine_id: int, movement_type: str, quantity: int) -> bool:
         """
         Processa un movimento quando l'utente seleziona un vino dai pulsanti inline.
+        Se ci sono movimenti multipli pendenti, continua con il prossimo dopo questo.
         
         Args:
             update: Update Telegram
@@ -806,6 +903,46 @@ class InventoryMovementManager:
                     )
                 
                 await query.edit_message_text(success_message, parse_mode='Markdown')
+                
+                # Controlla se ci sono movimenti multipli pendenti
+                pending_movements = context.user_data.get('pending_movements', [])
+                if pending_movements:
+                    # Rimuovi il movimento appena processato dalla lista
+                    # Il primo movimento nella lista è quello appena processato
+                    if len(pending_movements) > 0:
+                        pending_movements.pop(0)
+                        context.user_data['pending_movements'] = pending_movements
+                        
+                        # Se ci sono ancora movimenti pendenti, processa il prossimo
+                        if pending_movements:
+                            next_movement = pending_movements[0]
+                            logger.info(
+                                f"[MOVEMENT] Movimento multiplo: processato primo, rimangono {len(pending_movements)} movimenti. "
+                                f"Prossimo: {next_movement['type']} {next_movement['quantity']} {next_movement['wine_name']}"
+                            )
+                            
+                            # Crea un update fittizio per processare il prossimo movimento
+                            # Usa il messaggio originale salvato nel context
+                            original_message = context.user_data.get('original_message', '')
+                            
+                            # Processa il prossimo movimento
+                            if next_movement['type'] == 'consumo':
+                                await self._process_consumo(
+                                    update, context, telegram_id, 
+                                    next_movement['wine_name'], 
+                                    next_movement['quantity']
+                                )
+                            else:
+                                await self._process_rifornimento(
+                                    update, context, telegram_id, 
+                                    next_movement['wine_name'], 
+                                    next_movement['quantity']
+                                )
+                        else:
+                            # Tutti i movimenti sono stati processati
+                            logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
+                            context.user_data.pop('pending_movements', None)
+                            context.user_data.pop('original_message', None)
             else:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 
