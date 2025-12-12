@@ -248,7 +248,20 @@ class AsyncDatabaseManager:
                     })
                     return s.translate(trans)
                 search_term_unaccent = strip_accents(search_term_clean)
-                search_words = [w.strip() for w in search_term_clean.split() if len(w.strip()) > 2]
+                
+                # Parole comuni italiane da ignorare per matching significativo
+                stop_words = {'del', 'della', 'dello', 'dei', 'degli', 'delle', 'di', 'da', 'dal', 'dalla', 
+                             'dallo', 'dai', 'dagli', 'dalle', 'la', 'le', 'il', 'lo', 'gli', 'i', 'un', 
+                             'una', 'uno', 'e', 'o', 'a', 'in', 'su', 'per', 'con', 'tra', 'fra'}
+                
+                # Estrai parole significative (lunghe > 2 caratteri e non stop words)
+                all_words = [w.strip() for w in search_term_clean.split()]
+                search_words = [w for w in all_words if len(w) > 2 and w not in stop_words]
+                
+                # Determina se la query sembra essere un produttore
+                # Criteri: contiene "del", "di", "da" O inizia con "ca" (es. "ca del bosco")
+                is_likely_producer = any(word in search_term_clean for word in [' del ', ' di ', ' da ', 'ca ', 'ca\'', 'castello', 'tenuta', 'azienda'])
+                
                 search_pattern = f"%{search_term_clean}%"
                 search_pattern_unaccent = f"%{search_term_unaccent}%"
                 
@@ -262,31 +275,51 @@ class AsyncDatabaseManager:
                     except ValueError:
                         pass
                 
+                # Condizioni base: match completo su frase (priorità alta)
                 query_conditions = [
                     "name ILIKE :search_pattern",
                     "producer ILIKE :search_pattern",
-                    "region ILIKE :search_pattern",
-                    "country ILIKE :search_pattern",
-                    "wine_type ILIKE :search_pattern",
-                    "classification ILIKE :search_pattern",
-                    "grape_variety ILIKE :search_pattern",
-                    # Match accent-insensitive usando translate su PostgreSQL
                     "translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
-                    "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
-                    "translate(lower(classification), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
+                    "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
                 ]
                 
-                if len(search_words) > 1:
-                    for i, word in enumerate(search_words):
-                        query_conditions.extend([
-                            f"name ILIKE :word_{i}",
-                            f"producer ILIKE :word_{i}",
-                            f"region ILIKE :word_{i}",
-                            f"country ILIKE :word_{i}",
-                            f"wine_type ILIKE :word_{i}",
-                            f"classification ILIKE :word_{i}",
-                            f"grape_variety ILIKE :word_{i}"
-                        ])
+                # Se ci sono parole significative, aggiungi condizioni più specifiche
+                if len(search_words) > 0:
+                    # Per query multi-parola significative, richiediamo che TUTTE le parole significative matchino
+                    if len(search_words) > 1:
+                        # Costruisci condizione AND: tutte le parole significative devono essere presenti
+                        if is_likely_producer:
+                            # Per produttori, tutte le parole devono matchare nel producer O nel name
+                            word_conditions_producer = []
+                            word_conditions_name = []
+                            for i, word in enumerate(search_words):
+                                word_conditions_producer.append(f"producer ILIKE :word_{i}")
+                                word_conditions_name.append(f"name ILIKE :word_{i}")
+                            # Match completo su producer (priorità) O tutte le parole su name
+                            query_conditions.append(f"({' AND '.join(word_conditions_producer)})")
+                            query_conditions.append(f"({' AND '.join(word_conditions_name)})")
+                        else:
+                            # Per altre query, tutte le parole devono matchare (name O producer insieme)
+                            word_conditions_combined = []
+                            for i, word in enumerate(search_words):
+                                word_conditions_combined.append(
+                                    f"(name ILIKE :word_{i} OR producer ILIKE :word_{i})"
+                                )
+                            query_conditions.append(f"({' AND '.join(word_conditions_combined)})")
+                    else:
+                        # Singola parola significativa: match più permissivo ma filtrato
+                        word = search_words[0]
+                        if is_likely_producer:
+                            # Per produttori, cerca principalmente nel producer
+                            query_conditions.extend([
+                                f"producer ILIKE :word_0",
+                                f"name ILIKE :word_0"
+                            ])
+                        else:
+                            query_conditions.extend([
+                                f"name ILIKE :word_0",
+                                f"producer ILIKE :word_0"
+                            ])
                 
                 query_params = {
                     "user_id": user.id,
@@ -294,12 +327,12 @@ class AsyncDatabaseManager:
                     "search_pattern_unaccent": search_pattern_unaccent,
                     "accent_from": accent_from,
                     "accent_to": accent_to,
-                    "limit": limit
+                    "limit": limit * 2  # Recupera più risultati per filtraggio post-query
                 }
                 
-                if len(search_words) > 1:
-                    for i, word in enumerate(search_words):
-                        query_params[f"word_{i}"] = f"%{word}%"
+                # Aggiungi parametri per le parole significative
+                for i, word in enumerate(search_words):
+                    query_params[f"word_{i}"] = f"%{word}%"
                 
                 if search_numeric is not None:
                     query_conditions.append("vintage = :search_numeric")
@@ -310,13 +343,33 @@ class AsyncDatabaseManager:
                     query_conditions.append("(ABS(alcohol_content - :search_float) < 0.1)")
                     query_params["search_float"] = search_float
                 
-                query = sql_text(f"""
-                    SELECT *, 
+                # Calcolo match_priority più intelligente (usando parametri SQL corretti)
+                if is_likely_producer:
+                    # Per produttori, producer ha priorità più alta
+                    priority_case = """
+                        CASE 
+                            WHEN producer ILIKE :search_pattern THEN 1
+                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
+                            WHEN name ILIKE :search_pattern THEN 2
+                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
+                            ELSE 3
+                        END
+                    """
+                else:
+                    # Per altri, name ha priorità più alta
+                    priority_case = """
                         CASE 
                             WHEN name ILIKE :search_pattern THEN 1
+                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
                             WHEN producer ILIKE :search_pattern THEN 2
+                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
                             ELSE 3
-                        END as match_priority
+                        END
+                    """
+                
+                query = sql_text(f"""
+                    SELECT *, 
+                        {priority_case} as match_priority
                     FROM {table_name} 
                     WHERE user_id = :user_id
                     AND ({' OR '.join(query_conditions)})
@@ -328,6 +381,8 @@ class AsyncDatabaseManager:
                 rows = result.fetchall()
                 
                 wines = []
+                search_term_lower = search_term_clean.lower()
+                
                 for row in rows:
                     wine_dict = {
                         'id': row.id,
@@ -351,12 +406,27 @@ class AsyncDatabaseManager:
                         'updated_at': row.updated_at
                     }
                     
+                    # Filtro post-query: per query multi-parola, verifica che almeno una parola significativa matchi
+                    if len(search_words) > 1 and is_likely_producer:
+                        # Per query di produttore, verifica che producer contenga almeno una parola significativa
+                        producer_lower = (wine_dict['producer'] or '').lower()
+                        name_lower = (wine_dict['name'] or '').lower()
+                        matches_producer = any(word in producer_lower for word in search_words)
+                        matches_name = any(word in name_lower for word in search_words)
+                        # Se non matcha né nel producer né nel name con almeno una parola significativa, salta
+                        if not matches_producer and not matches_name:
+                            continue
+                        # Se matcha solo nel name ma è una query di produttore, dà priorità più bassa (aggiunto dopo)
+                    
                     wine = Wine()
                     for key, value in wine_dict.items():
                         setattr(wine, key, value)
                     wines.append(wine)
                 
-                logger.info(f"Trovati {len(wines)} vini per ricerca '{search_term}' per {telegram_id}/{user.business_name}")
+                # Limita i risultati finali
+                wines = wines[:limit]
+                
+                logger.info(f"Trovati {len(wines)} vini per ricerca '{search_term}' per {telegram_id}/{user.business_name} (is_producer={is_likely_producer}, words={search_words})")
                 return wines
                 
             except Exception as e:
