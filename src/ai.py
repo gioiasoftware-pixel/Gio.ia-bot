@@ -700,11 +700,15 @@ async def format_wines_response_by_count(wines: list, telegram_id: int = None, q
             except Exception as e:
                 logger.warning(f"Errore generazione link viewer: {e}")
         
-        context_text = f" {query_context}" if query_context else ""
+        if query_context:
+            context_text = f" {query_context}"
+        else:
+            context_text = " che corrispondono alla tua ricerca"
+        
         return (
             f"🍷 **Hai tanti vini{context_text}!**\n\n"
-            f"Ho trovato **{num_wines} vini** che corrispondono alla tua ricerca.\n\n"
-            f"💡 Per vedere tutti i vini e filtrare facilmente, usa il link qui sotto:{viewer_link_text}"
+            f"Ho trovato **{num_wines} vini**.\n\n"
+            f"💡 Per vedere tutti i vini e filtrare facilmente, clicca sul link qui sotto:{viewer_link_text}"
         )
     
     # Fallback: usa format_inventory_list normale
