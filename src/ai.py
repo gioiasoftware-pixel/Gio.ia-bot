@@ -888,15 +888,6 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
         # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker)
         if _is_movement_summary_request(prompt):
             return "[[ASK_MOVES_PERIOD]]"
-        
-        # Richieste informative generiche (quale vino ha meno quantità, quale è il più costoso, ecc.)
-        query_type, field = _is_informational_query(prompt)
-        if query_type and field:
-            logger.info(f"[INFORMATIONAL_QUERY] Rilevata query informativa: {query_type} {field}")
-            response = await _handle_informational_query(telegram_id, query_type, field)
-            if response:
-                return response
-            # Se errore, continua con AI normale
 
         movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):
@@ -1229,6 +1220,42 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 }
             }
         ]
+        # Domande informative generiche (quale vino ha meno quantità, quale è il più costoso, ecc.)
+        tools.extend([
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_wine_by_criteria",
+                    "description": """Trova il vino che corrisponde a criteri specifici (min/max per quantità, prezzo, annata).
+                    Usa questa funzione quando l'utente chiede:
+                    - "quale vino ha meno quantità" → query_type: "min", field: "quantity"
+                    - "quale è il più costoso" → query_type: "max", field: "selling_price"
+                    - "quale ha più bottiglie" → query_type: "max", field: "quantity"
+                    - "quale è il più economico" → query_type: "min", field: "selling_price"
+                    - "quale vino ho pagato di più" → query_type: "max", field: "cost_price"
+                    - "quale è il più recente" → query_type: "max", field: "vintage"
+                    - "quale è il più vecchio" → query_type: "min", field: "vintage"
+                    """,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_type": {
+                                "type": "string",
+                                "enum": ["min", "max"],
+                                "description": "Tipo di query: 'min' per trovare il minimo, 'max' per trovare il massimo"
+                            },
+                            "field": {
+                                "type": "string",
+                                "enum": ["quantity", "selling_price", "cost_price", "vintage"],
+                                "description": "Campo da interrogare: 'quantity' per quantità bottiglie, 'selling_price' per prezzo vendita, 'cost_price' per prezzo acquisto, 'vintage' per annata"
+                            }
+                        },
+                        "required": ["query_type", "field"]
+                    }
+                }
+            }
+        ])
+        
         # Ricerca filtrata e riepilogo inventario
         tools.extend([
             {
@@ -1530,6 +1557,18 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 except Exception as e:
                     logger.error(f"Errore get_movement_summary tool: {e}")
                     return "⚠️ Errore nel calcolo dei movimenti. Riprova."
+            
+            if name == "get_wine_by_criteria":
+                query_type = args.get("query_type")
+                field = args.get("field")
+                if not query_type or not field:
+                    return "❌ Richiesta incompleta: specifica query_type (min/max) e field (quantity/selling_price/cost_price/vintage)."
+                
+                logger.info(f"[GET_WINE_BY_CRITERIA] AI ha richiesto: {query_type} {field}")
+                response = await _handle_informational_query(telegram_id, query_type, field)
+                if response:
+                    return response
+                return "❌ Non ho trovato vini che corrispondono ai criteri richiesti."
             
             # Tool non riconosciuto
             logger.warning(f"[TOOLS] Tool '{name}' non riconosciuto nel fallback")
