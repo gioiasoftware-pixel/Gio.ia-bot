@@ -1387,6 +1387,15 @@ ISTRUZIONI IMPORTANTI:
 - Se l'utente fa domande generiche, usa il contesto per essere specifico
 - Se l'utente chiede di vedere tutti i vini o l'inventario completo, usa la funzione tool "generate_view_link" per inviare il link del viewer
 
+GESTIONE QUERY QUALITATIVE E SENSORIALI:
+- Se l'utente chiede "più pregiato", "migliore", "di valore", "prestigioso" → usa get_wine_by_criteria con query_type: "max", field: "selling_price"
+- Se l'utente chiede "più economico", "meno costoso" → usa get_wine_by_criteria con query_type: "min", field: "selling_price"
+- Se l'utente chiede "più recente", "più nuovo" → usa get_wine_by_criteria con query_type: "max", field: "vintage"
+- Se l'utente chiede "più vecchio", "più antico" → usa get_wine_by_criteria con query_type: "min", field: "vintage"
+- Se l'utente chiede caratteristiche sensoriali come "più tannico", "più corposo", "più floreale", "più secco", "più boccato":
+  Il sistema cerca automaticamente nei campi description/notes, usa mappatura euristica (wine_type + alcohol_content) e mappatura per uvaggi tipici
+- MAI rispondere "vino non trovato" o "errore temporaneo" a domande qualitative o sensoriali: accedi sempre al database e ragiona sui dati disponibili
+
 REGOLA CRITICA PER RICERCHE FILTRATE:
 - Se l'utente chiede vini con QUALSIASI filtro geografico/tipo/prezzo/annata (es. "della Toscana", "italiani", "rossi", "sotto €50"), DEVI chiamare search_wines con i filtri estratti
 - NON usare get_inventory_list se ci sono filtri nella richiesta
