@@ -367,11 +367,13 @@ class AsyncDatabaseManager:
                                 f"grape_variety ILIKE :word_0"
                             ])
                         else:
-                            query_conditions.extend([
-                                f"name ILIKE :word_0",
-                                f"producer ILIKE :word_0",
-                                f"grape_variety ILIKE :word_0"
-                            ])
+                            # Per singola parola, aggiungi anche varianti plurali
+                            word_variants = normalize_plural_for_search(word)
+                            query_conditions.append(f"(name ILIKE :word_0 OR producer ILIKE :word_0 OR grape_variety ILIKE :word_0)")
+                            # Aggiungi condizioni per varianti
+                            for j, variant in enumerate(word_variants[1:], start=1):
+                                param_key = f"word_0_var_{j}"
+                                query_conditions.append(f"(name ILIKE :{param_key} OR producer ILIKE :{param_key} OR grape_variety ILIKE :{param_key})")
                 
                 query_params = {
                     "user_id": user.id,
