@@ -303,6 +303,7 @@ class AsyncDatabaseManager:
                 
                 # Condizioni base: match completo su frase (priorità alta)
                 # Include anche grape_variety (uvaggio) per trovare vini cercando per vitigno
+                # Aggiungi anche varianti plurali per gestire "vermentini" -> "vermentino"
                 query_conditions = [
                     "name ILIKE :search_pattern",
                     "producer ILIKE :search_pattern",
@@ -311,6 +312,16 @@ class AsyncDatabaseManager:
                     "translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent",
                     "translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent"
                 ]
+                
+                # Aggiungi condizioni per varianti plurali (es. "vermentini" -> "vermentino")
+                for idx, variant in enumerate(search_variants[1:], start=1):  # Skip primo (originale)
+                    variant_pattern = f"%{variant}%"
+                    query_conditions.extend([
+                        f"name ILIKE :search_variant_{idx}",
+                        f"grape_variety ILIKE :search_variant_{idx}",
+                        f"translate(lower(name), :accent_from, :accent_to) ILIKE :search_variant_unaccent_{idx}",
+                        f"translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_variant_unaccent_{idx}"
+                    ])
                 
                 # Se ci sono parole significative, aggiungi condizioni più specifiche
                 if len(search_words) > 0:
@@ -334,9 +345,16 @@ class AsyncDatabaseManager:
                             # Per altre query, tutte le parole devono matchare (name O producer O grape_variety insieme)
                             word_conditions_combined = []
                             for i, word in enumerate(search_words):
-                                word_conditions_combined.append(
-                                    f"(name ILIKE :word_{i} OR producer ILIKE :word_{i} OR grape_variety ILIKE :word_{i})"
-                                )
+                                word_variants = normalize_plural_for_search(word)
+                                # Crea condizioni per ogni variante della parola
+                                word_conditions = []
+                                for j, variant in enumerate(word_variants):
+                                    if j == 0:
+                                        word_conditions.append(f"(name ILIKE :word_{i} OR producer ILIKE :word_{i} OR grape_variety ILIKE :word_{i})")
+                                    else:
+                                        param_key = f"word_{i}_var_{j}"
+                                        word_conditions.append(f"(name ILIKE :{param_key} OR producer ILIKE :{param_key} OR grape_variety ILIKE :{param_key})")
+                                word_conditions_combined.append(f"({' OR '.join(word_conditions)})")
                             query_conditions.append(f"({' AND '.join(word_conditions_combined)})")
                     else:
                         # Singola parola significativa: match più permissivo ma filtrato
