@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import asyncio
-from typing import Optional
+from typing import Optional, Any
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database_async import async_db_manager
