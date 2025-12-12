@@ -235,8 +235,22 @@ class InventoryMovementManager:
             # Cerca tutti i vini che corrispondono al termine di ricerca (con filtri prezzo se presenti)
             matching_wines = await fuzzy_match_wine_name(telegram_id, wine_name, limit=50, price_filters=price_filters)
             
-            # Se ci sono più corrispondenze, mostra pulsanti per selezione
+            # Se ci sono più corrispondenze, gestisci in base al numero
             if len(matching_wines) > 1:
+                # Se ci sono più di 10 risultati, chiedi di specificare meglio
+                if len(matching_wines) > 10:
+                    message = (
+                        f"🔍 **Ho trovato {len(matching_wines)} vini che corrispondono a '{wine_name}'**\n\n"
+                        f"💡 **Per favore, specifica meglio la ricerca** (es. aggiungi produttore, annata, o altre informazioni)\n\n"
+                        f"Esempi:\n"
+                        f"• '{wine_name} [produttore]'\n"
+                        f"• '{wine_name} [annata]'\n"
+                        f"• '{wine_name} [regione]'"
+                    )
+                    await update.message.reply_text(message, parse_mode='Markdown')
+                    return True
+                
+                # Se ci sono 2-10 risultati, mostra pulsanti per selezione
                 # Identifica quale campo differenzia i vini
                 diff_field, diff_label = _identify_differentiating_field(matching_wines)
                 
@@ -390,8 +404,22 @@ class InventoryMovementManager:
             # Cerca tutti i vini che corrispondono al termine di ricerca (con filtri prezzo se presenti)
             matching_wines = await fuzzy_match_wine_name(telegram_id, wine_name, limit=50, price_filters=price_filters)
             
-            # Se ci sono più corrispondenze, mostra pulsanti per selezione
+            # Se ci sono più corrispondenze, gestisci in base al numero
             if len(matching_wines) > 1:
+                # Se ci sono più di 10 risultati, chiedi di specificare meglio
+                if len(matching_wines) > 10:
+                    message = (
+                        f"🔍 **Ho trovato {len(matching_wines)} vini che corrispondono a '{wine_name}'**\n\n"
+                        f"💡 **Per favore, specifica meglio la ricerca** (es. aggiungi produttore, annata, o altre informazioni)\n\n"
+                        f"Esempi:\n"
+                        f"• '{wine_name} [produttore]'\n"
+                        f"• '{wine_name} [annata]'\n"
+                        f"• '{wine_name} [regione]'"
+                    )
+                    await update.message.reply_text(message, parse_mode='Markdown')
+                    return True
+                
+                # Se ci sono 2-10 risultati, mostra pulsanti per selezione
                 # Identifica quale campo differenzia i vini
                 diff_field, diff_label = _identify_differentiating_field(matching_wines)
                 

@@ -446,48 +446,19 @@ class AsyncDatabaseManager:
                     query_conditions.append("(ABS(alcohol_content - :search_float) < 0.1)")
                     query_params["search_float"] = search_float
                 
-                # Calcolo match_priority più intelligente (usando parametri SQL corretti)
-                if is_likely_producer:
-                    # Per produttori, producer ha priorità più alta
-                    priority_case = """
-                        CASE 
-                            WHEN producer ILIKE :search_pattern THEN 1
-                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
-                            WHEN name ILIKE :search_pattern THEN 2
-                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
-                            WHEN grape_variety ILIKE :search_pattern THEN 3
-                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
-                            ELSE 4
-                        END
-                    """
-                elif is_likely_grape_variety:
-                    # Per uvaggi, grape_variety ha priorità più alta rispetto a name
-                    # Questo garantisce che vini con uvaggio corrispondente vengano prima
-                    # anche se altri vini hanno il termine nel nome
-                    priority_case = """
-                        CASE 
-                            WHEN grape_variety ILIKE :search_pattern THEN 1
-                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
-                            WHEN producer ILIKE :search_pattern THEN 2
-                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
-                            WHEN name ILIKE :search_pattern THEN 3
-                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
-                            ELSE 4
-                        END
-                    """
-                else:
-                    # Per altri, name ha priorità più alta, poi producer, poi grape_variety
-                    priority_case = """
-                        CASE 
-                            WHEN name ILIKE :search_pattern THEN 1
-                            WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
-                            WHEN producer ILIKE :search_pattern THEN 2
-                            WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 2
-                            WHEN grape_variety ILIKE :search_pattern THEN 3
-                            WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 3
-                            ELSE 4
-                        END
-                    """
+                # Priorità uniforme: nome, produttore e uvaggio hanno la stessa priorità
+                # Se il termine matcha in ALMENO UNO dei 3 campi, il vino viene incluso
+                priority_case = """
+                    CASE 
+                        WHEN name ILIKE :search_pattern THEN 1
+                        WHEN translate(lower(name), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
+                        WHEN producer ILIKE :search_pattern THEN 1
+                        WHEN translate(lower(producer), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
+                        WHEN grape_variety ILIKE :search_pattern THEN 1
+                        WHEN translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_pattern_unaccent THEN 1
+                        ELSE 2
+                    END
+                """
                 
                 query = sql_text(f"""
                     SELECT *, 
@@ -528,17 +499,8 @@ class AsyncDatabaseManager:
                         'updated_at': row.updated_at
                     }
                     
-                    # Filtro post-query: per query multi-parola, verifica che almeno una parola significativa matchi
-                    if len(search_words) > 1 and is_likely_producer:
-                        # Per query di produttore, verifica che producer contenga almeno una parola significativa
-                        producer_lower = (wine_dict['producer'] or '').lower()
-                        name_lower = (wine_dict['name'] or '').lower()
-                        matches_producer = any(word in producer_lower for word in search_words)
-                        matches_name = any(word in name_lower for word in search_words)
-                        # Se non matcha né nel producer né nel name con almeno una parola significativa, salta
-                        if not matches_producer and not matches_name:
-                            continue
-                        # Se matcha solo nel name ma è una query di produttore, dà priorità più bassa (aggiunto dopo)
+                    # Se il termine matcha in almeno uno dei 3 campi (name, producer, grape_variety), 
+                    # il vino viene incluso - nessun filtro post-query per escludere risultati validi
                     
                     wine = Wine()
                     for key, value in wine_dict.items():
