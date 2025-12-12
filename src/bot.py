@@ -327,6 +327,15 @@ async def chat_handler(update, context):
                     
                     logger.info(f"[BOT] Processing WINE_SELECTION_BUTTONS marker with {len(wine_ids)} wine IDs")
                     
+                    # Verifica se il messaggio originale indica un movimento (consumo/rifornimento)
+                    # Se sì, non mostrare la scheda info anche se c'è una sola corrispondenza
+                    user_message_lower = user_text.lower() if user_text else ""
+                    is_movement_request = any(keyword in user_message_lower for keyword in [
+                        'ho venduto', 'ho consumato', 'ho bevuto', 'venduto', 'consumato', 'bevuto',
+                        'ho ricevuto', 'ho comprato', 'ho aggiunto', 'ricevuto', 'comprato', 'aggiunto',
+                        'rifornimento', 'consumo'
+                    ])
+                    
                     # Recupera vini dal database
                     from .database_async import async_db_manager
                     user_wines = await async_db_manager.get_user_wines(telegram_id)
@@ -335,6 +344,80 @@ async def chat_handler(update, context):
                     selected_wines = [w for w in user_wines if w.id in wine_ids]
                     
                     if selected_wines:
+                        # Se c'è una sola corrispondenza E non è una richiesta di movimento, mostra direttamente la scheda info
+                        if len(selected_wines) == 1 and not is_movement_request:
+                            from .response_templates import format_wine_info
+                            wine = selected_wines[0]
+                            wine_info = format_wine_info(wine)
+                            
+                            # Processa marker FILL_FIELDS e EDIT_FIELDS se presenti
+                            fill_marker = None
+                            edit_marker = None
+                            
+                            if "[[FILL_FIELDS:" in wine_info:
+                                fill_start = wine_info.rfind("[[FILL_FIELDS:")
+                                fill_text = wine_info[fill_start:wine_info.find("]]", fill_start) + 2] if wine_info.find("]]", fill_start) >= 0 else None
+                                if fill_text:
+                                    fill_marker = fill_text
+                            
+                            if "[[EDIT_FIELDS:" in wine_info:
+                                edit_start = wine_info.rfind("[[EDIT_FIELDS:")
+                                edit_text = wine_info[edit_start:wine_info.find("]]", edit_start) + 2] if wine_info.find("]]", edit_start) >= 0 else None
+                                if edit_text:
+                                    edit_marker = edit_text
+                            
+                            # Pulisci wine_info rimuovendo i marker
+                            wine_info_clean = wine_info
+                            if fill_marker:
+                                wine_info_clean = wine_info_clean.replace(fill_marker, "").strip()
+                            if edit_marker:
+                                wine_info_clean = wine_info_clean.replace(edit_marker, "").strip()
+                            wine_info_clean = wine_info_clean.rstrip()
+                            
+                            # Estrai wine_id e fields dai marker
+                            wine_id = wine.id
+                            fill_fields = []
+                            edit_fields = []
+                            
+                            if fill_marker:
+                                marker_inner = fill_marker.strip("[]")
+                                parts = marker_inner.split(":", 2)
+                                fill_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                            
+                            if edit_marker:
+                                marker_inner = edit_marker.strip("[]")
+                                parts = marker_inner.split(":", 2)
+                                edit_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                            
+                            # Salva dati nel context per callback successivi
+                            if wine_id:
+                                context.user_data[f'wine_fields_{wine_id}'] = {
+                                    'fill_fields': fill_fields,
+                                    'edit_fields': edit_fields,
+                                    'original_text': wine_info_clean
+                                }
+                            
+                            # Mostra bottoni se ci sono campi da compilare/modificare
+                            main_buttons = []
+                            if fill_fields:
+                                main_buttons.append([InlineKeyboardButton(
+                                    "➕ Aggiungi dati",
+                                    callback_data=f"show_fill:{wine_id}"
+                                )])
+                            if edit_fields:
+                                main_buttons.append([InlineKeyboardButton(
+                                    "📝 Modifica dati",
+                                    callback_data=f"show_edit:{wine_id}"
+                                )])
+                            
+                            if main_buttons:
+                                keyboard = InlineKeyboardMarkup(main_buttons)
+                                await update.message.reply_text(wine_info_clean, parse_mode='Markdown', reply_markup=keyboard)
+                            else:
+                                await update.message.reply_text(wine_info_clean, parse_mode='Markdown')
+                            return
+                        
+                        # Se ci sono più corrispondenze, mostra bottoni per selezione
                         message = f"🔍 **Ho trovato {len(selected_wines)} vini che corrispondono alla tua ricerca**\n\n"
                         message += "Seleziona quale vuoi vedere:\n\n"
                         
@@ -1000,7 +1083,70 @@ async def callback_handler(update, context):
             
             if selected_wine:
                 wine_info = format_wine_info(selected_wine)
-                await query.edit_message_text(wine_info, parse_mode='Markdown')
+                
+                # Processa marker FILL_FIELDS e EDIT_FIELDS se presenti
+                fill_marker = None
+                edit_marker = None
+                
+                if "[[FILL_FIELDS:" in wine_info:
+                    fill_start = wine_info.rfind("[[FILL_FIELDS:")
+                    fill_text = wine_info[fill_start:wine_info.find("]]", fill_start) + 2] if wine_info.find("]]", fill_start) >= 0 else None
+                    if fill_text:
+                        fill_marker = fill_text
+                
+                if "[[EDIT_FIELDS:" in wine_info:
+                    edit_start = wine_info.rfind("[[EDIT_FIELDS:")
+                    edit_text = wine_info[edit_start:wine_info.find("]]", edit_start) + 2] if wine_info.find("]]", edit_start) >= 0 else None
+                    if edit_text:
+                        edit_marker = edit_text
+                
+                # Pulisci wine_info rimuovendo i marker
+                wine_info_clean = wine_info
+                if fill_marker:
+                    wine_info_clean = wine_info_clean.replace(fill_marker, "").strip()
+                if edit_marker:
+                    wine_info_clean = wine_info_clean.replace(edit_marker, "").strip()
+                wine_info_clean = wine_info_clean.rstrip()
+                
+                # Estrai fields dai marker
+                fill_fields = []
+                edit_fields = []
+                
+                if fill_marker:
+                    marker_inner = fill_marker.strip("[]")
+                    parts = marker_inner.split(":", 2)
+                    fill_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                
+                if edit_marker:
+                    marker_inner = edit_marker.strip("[]")
+                    parts = marker_inner.split(":", 2)
+                    edit_fields = [f for f in parts[2].split(",") if f][:6] if len(parts) > 2 else []
+                
+                # Salva dati nel context per callback successivi
+                context.user_data[f'wine_fields_{wine_id}'] = {
+                    'fill_fields': fill_fields,
+                    'edit_fields': edit_fields,
+                    'original_text': wine_info_clean
+                }
+                
+                # Mostra bottoni se ci sono campi da compilare/modificare
+                main_buttons = []
+                if fill_fields:
+                    main_buttons.append([InlineKeyboardButton(
+                        "➕ Aggiungi dati",
+                        callback_data=f"show_fill:{wine_id}"
+                    )])
+                if edit_fields:
+                    main_buttons.append([InlineKeyboardButton(
+                        "📝 Modifica dati",
+                        callback_data=f"show_edit:{wine_id}"
+                    )])
+                
+                if main_buttons:
+                    keyboard = InlineKeyboardMarkup(main_buttons)
+                    await query.edit_message_text(wine_info_clean, parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    await query.edit_message_text(wine_info_clean, parse_mode='Markdown')
             else:
                 await query.answer("❌ Vino non trovato.", show_alert=True)
             return

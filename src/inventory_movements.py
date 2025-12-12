@@ -56,6 +56,112 @@ def word_to_number(word: str) -> Optional[int]:
     return numbers_map.get(word_lower)
 
 
+def _identify_differentiating_field(wines: List[Any]) -> Tuple[Optional[str], str]:
+    """
+    Identifica quale campo differenzia i vini quando hanno lo stesso nome.
+    
+    Args:
+        wines: Lista di oggetti Wine
+        
+    Returns:
+        Tuple (nome_campo, etichetta_utente): Il campo che differenzia i vini e la sua etichetta
+    """
+    if len(wines) < 2:
+        return None, ""
+    
+    # Verifica se tutti hanno lo stesso nome
+    first_name = wines[0].name.lower().strip() if wines[0].name else ""
+    all_same_name = all(
+        (w.name.lower().strip() if w.name else "") == first_name 
+        for w in wines
+    )
+    
+    if not all_same_name:
+        # Se i nomi sono diversi, non c'è bisogno di identificare un campo differenziante
+        return None, ""
+    
+    # Ordine di priorità per i campi differenzianti
+    # Nota: supplier non è disponibile nel modello Wine attuale
+    field_priority = [
+        ('vintage', 'Annata'),
+        ('producer', 'Produttore'),
+        ('classification', 'Classificazione'),
+        ('grape_variety', 'Vitigno'),
+        ('region', 'Regione'),
+        ('country', 'Nazione'),
+        ('wine_type', 'Tipo'),
+        ('cost_price', 'Prezzo acquisto'),
+        ('selling_price', 'Prezzo vendita'),
+        ('alcohol_content', 'Gradazione'),
+    ]
+    
+    # Cerca il primo campo che varia tra i vini
+    for field_name, field_label in field_priority:
+        # Verifica che almeno un vino abbia questo campo
+        if not any(hasattr(wine, field_name) for wine in wines):
+            continue
+            
+        values = []
+        for wine in wines:
+            if hasattr(wine, field_name):
+                value = getattr(wine, field_name, None)
+                # Normalizza valori None/vuoti
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    value = None
+                values.append(value)
+            else:
+                values.append(None)
+        
+        # Se ci sono valori diversi (non tutti None e non tutti uguali)
+        unique_values = [v for v in values if v is not None]
+        if len(unique_values) > 1 and len(set(str(v) for v in unique_values)) > 1:
+            return field_name, field_label
+    
+    # Se nessun campo differenzia, ritorna None
+    return None, ""
+
+
+def _format_wine_button_text(wine: Any, differentiating_field: Optional[str] = None) -> str:
+    """
+    Formatta il testo del pulsante per un vino, evidenziando il campo differenziante se specificato.
+    
+    Args:
+        wine: Oggetto Wine
+        differentiating_field: Nome del campo che differenzia questo vino dagli altri
+        
+    Returns:
+        Testo formattato per il pulsante
+    """
+    if differentiating_field and hasattr(wine, differentiating_field):
+        # Mostra solo il campo differenziante
+        value = getattr(wine, differentiating_field, None)
+        if value is not None:
+            if isinstance(value, float):
+                # Per i prezzi, mostra con 2 decimali
+                if differentiating_field in ['cost_price', 'selling_price']:
+                    return f"{wine.name} - €{value:.2f}"
+                elif differentiating_field == 'alcohol_content':
+                    return f"{wine.name} - {value}%"
+                else:
+                    return f"{wine.name} - {value}"
+            elif isinstance(value, int):
+                return f"{wine.name} - {value}"
+            else:
+                # Stringa o altro tipo
+                value_str = str(value).strip()
+                if value_str:
+                    return f"{wine.name} - {value_str}"
+    
+    # Fallback: mostra nome + produttore + annata (se disponibili)
+    wine_display = wine.name
+    if hasattr(wine, 'producer') and wine.producer:
+        wine_display += f" ({wine.producer})"
+    if hasattr(wine, 'vintage') and wine.vintage:
+        wine_display += f" {wine.vintage}"
+    
+    return wine_display
+
+
 class InventoryMovementManager:
     """Gestore movimenti inventario"""
     
@@ -293,7 +399,14 @@ class InventoryMovementManager:
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:
+                # Identifica quale campo differenzia i vini
+                diff_field, diff_label = _identify_differentiating_field(matching_wines)
+                
                 message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
+                
+                if diff_field and diff_label:
+                    message += f"💡 **Questi vini si differenziano per: {diff_label}**\n\n"
+                
                 message += "Quale tra questi intendi?\n\n"
                 
                 # Crea pulsanti inline con i nomi completi dei vini organizzati su più colonne
@@ -305,11 +418,7 @@ class InventoryMovementManager:
                     for j in range(buttons_per_row):
                         if i + j < len(matching_wines):
                             wine = matching_wines[i + j]
-                            wine_display = wine.name
-                            if wine.producer:
-                                wine_display += f" ({wine.producer})"
-                            if wine.vintage:
-                                wine_display += f" {wine.vintage}"
+                            wine_display = _format_wine_button_text(wine, diff_field)
                             
                             # Limita lunghezza testo pulsante per evitare problemi Telegram
                             if len(wine_display) > 30:
@@ -444,7 +553,14 @@ class InventoryMovementManager:
             
             # Se ci sono più corrispondenze, mostra pulsanti per selezione
             if len(matching_wines) > 1:
+                # Identifica quale campo differenzia i vini
+                diff_field, diff_label = _identify_differentiating_field(matching_wines)
+                
                 message = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{wine_name}'**\n\n"
+                
+                if diff_field and diff_label:
+                    message += f"💡 **Questi vini si differenziano per: {diff_label}**\n\n"
+                
                 message += "Quale tra questi intendi?\n\n"
                 
                 # Crea pulsanti inline con i nomi completi dei vini organizzati su più colonne
@@ -456,11 +572,7 @@ class InventoryMovementManager:
                     for j in range(buttons_per_row):
                         if i + j < len(matching_wines):
                             wine = matching_wines[i + j]
-                            wine_display = wine.name
-                            if wine.producer:
-                                wine_display += f" ({wine.producer})"
-                            if wine.vintage:
-                                wine_display += f" {wine.vintage}"
+                            wine_display = _format_wine_button_text(wine, diff_field)
                             
                             # Limita lunghezza testo pulsante per evitare problemi Telegram
                             if len(wine_display) > 30:
@@ -917,7 +1029,14 @@ class InventoryMovementManager:
         
         if len(matching_wines) > 1:
             # Ci sono ambiguità, mostra pulsanti
+            # Identifica quale campo differenzia i vini
+            diff_field, diff_label = _identify_differentiating_field(matching_wines)
+            
             msg_text = f"🔍 **Ho trovato {len(matching_wines)} tipologie di vini che corrispondono a '{next_movement['wine_name']}'**\n\n"
+            
+            if diff_field and diff_label:
+                msg_text += f"💡 **Questi vini si differenziano per: {diff_label}**\n\n"
+            
             msg_text += "Quale tra questi intendi?\n\n"
             
             keyboard = []
@@ -928,11 +1047,7 @@ class InventoryMovementManager:
                 for j in range(buttons_per_row):
                     if i + j < len(matching_wines):
                         wine = matching_wines[i + j]
-                        wine_display = wine.name
-                        if wine.producer:
-                            wine_display += f" ({wine.producer})"
-                        if wine.vintage:
-                            wine_display += f" {wine.vintage}"
+                        wine_display = _format_wine_button_text(wine, diff_field)
                         
                         if len(wine_display) > 30:
                             wine_display = wine_display[:27] + "..."
