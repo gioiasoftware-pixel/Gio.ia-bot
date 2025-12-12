@@ -1042,6 +1042,9 @@ def _clean_wine_search_term(term: str) -> str:
     common_verbs = {'ho', 'hai', 'ha', 'abbiamo', 'avete', 'hanno', 'è', 'sono', 'c\'è', 'ci sono',
                     'vendo', 'vendi', 'vende', 'vendiamo', 'vendete', 'vendono'}
     
+    # Varianti comuni/typo di "vino" da rimuovere (es. "vinio", "vini")
+    wine_variants = {'vino', 'vinio', 'vini', 'vinii', 'vinno'}
+    
     # Preposizioni articolate che POTREBBERO far parte del nome (es. "del" in "Ca del Bosco")
     # Queste vengono preservate se seguite da una parola
     articulated_prepositions = {'del', 'della', 'dello', 'dei', 'degli', 'delle', 
@@ -1079,6 +1082,11 @@ def _clean_wine_search_term(term: str) -> str:
         
         # Rimuovi verbi comuni
         if word in common_verbs:
+            i += 1
+            continue
+        
+        # Rimuovi varianti/typo di "vino" (es. "vinio", "vini")
+        if word in wine_variants:
             i += 1
             continue
         
@@ -1332,10 +1340,12 @@ INVENTARIO ATTUALE:
                         try:
                             broad_term = re.sub(r"[^\w\s'’]", " ", prompt.lower()).strip()
                             if broad_term and len(broad_term) > 2:
-                                broad_found = await async_db_manager.search_wines(telegram_id, broad_term, limit=3)
-                                if broad_found and len(broad_found) == 1:
-                                    logger.info("[FORMATTED] Retry broad search matched exactly 1 wine → template info")
-                                    return format_wine_info(broad_found[0])
+                                logger.info(f"[FALLBACK] Tentativo ricerca diretta con termine: '{broad_term}'")
+                                broad_found = await async_db_manager.search_wines(telegram_id, broad_term, limit=50)
+                                if broad_found:
+                                    logger.info(f"[FALLBACK] Trovati {len(broad_found)} vini con ricerca diretta")
+                                    # Usa format_wines_response_by_count per gestire 1/multi/10+ vini
+                                    return await format_wines_response_by_count(broad_found, telegram_id, query_context=f"per '{broad_term}'")
                         except Exception as e:
                             logger.warning(f"Broad search fallback failed: {e}")
                     

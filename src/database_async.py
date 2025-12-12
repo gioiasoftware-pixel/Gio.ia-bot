@@ -249,6 +249,27 @@ class AsyncDatabaseManager:
                     return s.translate(trans)
                 search_term_unaccent = strip_accents(search_term_clean)
                 
+                # Normalizza plurali italiani per uvaggi e nomi
+                # Es: "vermentini" -> "vermentino", "spumanti" -> "spumante"
+                def normalize_plural_for_search(term: str) -> list[str]:
+                    """Ritorna lista di varianti: originale, senza plurale, con -o finale (per maschili)"""
+                    variants = [term]
+                    if len(term) > 2:
+                        if term.endswith('i'):
+                            # Plurale maschile: "vermentini" -> "vermentino"
+                            base = term[:-1]
+                            variants.append(base + 'o')  # vermentino
+                            variants.append(base)  # vermentin (match parziale)
+                        elif term.endswith('e'):
+                            # Plurale femminile o altro: "bianche" -> "bianco"
+                            base = term[:-1]
+                            variants.append(base + 'a')  # bianca
+                            variants.append(base + 'o')  # bianco
+                            variants.append(base)  # bianch
+                    return list(set(variants))  # Rimuovi duplicati
+                
+                search_variants = normalize_plural_for_search(search_term_clean)
+                
                 # Parole comuni italiane da ignorare per matching significativo
                 stop_words = {'del', 'della', 'dello', 'dei', 'degli', 'delle', 'di', 'da', 'dal', 'dalla', 
                              'dallo', 'dai', 'dagli', 'dalle', 'la', 'le', 'il', 'lo', 'gli', 'i', 'un', 
@@ -324,23 +345,48 @@ class AsyncDatabaseManager:
                     ])
                 
                 # Se ci sono parole significative, aggiungi condizioni più specifiche
+                producer_name_split_params = {}  # Parametri per split producer/name (se necessario)
                 if len(search_words) > 0:
                     # Per query multi-parola significative, richiediamo che TUTTE le parole significative matchino
                     if len(search_words) > 1:
                         # Costruisci condizione AND: tutte le parole significative devono essere presenti
                         if is_likely_producer:
-                            # Per produttori, tutte le parole devono matchare nel producer O nel name O nel grape_variety
-                            word_conditions_producer = []
-                            word_conditions_name = []
-                            word_conditions_grape = []
-                            for i, word in enumerate(search_words):
-                                word_conditions_producer.append(f"producer ILIKE :word_{i}")
-                                word_conditions_name.append(f"name ILIKE :word_{i}")
-                                word_conditions_grape.append(f"grape_variety ILIKE :word_{i}")
-                            # Match completo su producer (priorità) O tutte le parole su name O grape_variety
+                            # Per produttori, strategia più flessibile:
+                            # 1. Match completo del termine nel producer (priorità alta)
+                            # 2. Producer contiene le prime N parole (probabilmente nome produttore) 
+                            #    AND name contiene le parole rimanenti (probabilmente nome vino specifico)
+                            # 3. Tutte le parole insieme nel name (fallback)
+                            
+                            # Condizione 1: Match completo nel producer
+                            query_conditions.append("producer ILIKE :search_pattern")
+                            
+                            # Condizione 2: Produttore + nome vino (più flessibile)
+                            # Se abbiamo almeno 3 parole, prova a dividere: prime parole = produttore, ultime = nome
+                            if len(search_words) >= 3:
+                                # Usa le prime 2-3 parole per il produttore, le restanti per il nome
+                                producer_words = search_words[:min(3, len(search_words)-1)]  # Almeno 1 parola per il nome
+                                name_words = search_words[len(producer_words):]
+                                
+                                producer_conditions = [f"producer ILIKE :producer_word_{i}" for i in range(len(producer_words))]
+                                name_conditions = [f"name ILIKE :name_word_{i}" for i in range(len(name_words))]
+                                
+                                # Salva i parametri da aggiungere dopo
+                                for i, word in enumerate(producer_words):
+                                    producer_name_split_params[f"producer_word_{i}"] = f"%{word}%"
+                                for i, word in enumerate(name_words):
+                                    producer_name_split_params[f"name_word_{i}"] = f"%{word}%"
+                                
+                                query_conditions.append(f"({' AND '.join(producer_conditions)} AND {' AND '.join(name_conditions)})")
+                            
+                            # Condizione 3: Tutte le parole nel producer (match completo)
+                            word_conditions_producer = [f"producer ILIKE :word_{i}" for i in range(len(search_words))]
                             query_conditions.append(f"({' AND '.join(word_conditions_producer)})")
+                            
+                            # Condizione 4: Tutte le parole nel name (fallback)
+                            word_conditions_name = [f"name ILIKE :word_{i}" for i in range(len(search_words))]
                             query_conditions.append(f"({' AND '.join(word_conditions_name)})")
-                            query_conditions.append(f"({' AND '.join(word_conditions_grape)})")
+                            
+                            # Aggiungi i parametri split dopo la creazione di query_params (vedi sotto)
                         else:
                             # Per altre query, tutte le parole devono matchare (name O producer O grape_variety insieme)
                             word_conditions_combined = []
@@ -387,6 +433,9 @@ class AsyncDatabaseManager:
                 # Aggiungi parametri per le parole significative
                 for i, word in enumerate(search_words):
                     query_params[f"word_{i}"] = f"%{word}%"
+                
+                # Aggiungi parametri per split producer/name (se presenti)
+                query_params.update(producer_name_split_params)
                 
                 if search_numeric is not None:
                     query_conditions.append("vintage = :search_numeric")
