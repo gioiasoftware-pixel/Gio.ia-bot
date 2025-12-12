@@ -289,37 +289,12 @@ Esempi:
 async def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
     """
     Rileva se il prompt contiene un movimento inventario (consumo/rifornimento).
+    Usa pattern centralizzati da movement_patterns.
     Se sì, lo processa direttamente e ritorna il messaggio di conferma.
     Se no, ritorna None e il flow continua normalmente con l'AI.
     """
     try:
-        prompt_lower = prompt.lower().strip()
-        
-        # Pattern per consumo
-        consumo_patterns = [
-            r'ho venduto (\d+) bottiglie? di (.+)',
-            r'ho consumato (\d+) bottiglie? di (.+)',
-            r'ho bevuto (\d+) bottiglie? di (.+)',
-            r'ho venduto (\d+) (.+)',
-            r'ho consumato (\d+) (.+)',
-            r'ho bevuto (\d+) (.+)',
-            r'venduto (\d+) (.+)',
-            r'consumato (\d+) (.+)',
-            r'bevuto (\d+) (.+)',
-        ]
-        
-        # Pattern per rifornimento
-        rifornimento_patterns = [
-            r'ho ricevuto (\d+) bottiglie? di (.+)',
-            r'ho comprato (\d+) bottiglie? di (.+)',
-            r'ho aggiunto (\d+) bottiglie? di (.+)',
-            r'ho ricevuto (\d+) (.+)',
-            r'ho comprato (\d+) (.+)',
-            r'ho aggiunto (\d+) (.+)',
-            r'ricevuto (\d+) (.+)',
-            r'comprato (\d+) (.+)',
-            r'aggiunto (\d+) (.+)',
-        ]
+        from .movement_patterns import parse_single_movement, CONSUMO_PATTERNS_SIMPLE, RIFORNIMENTO_PATTERNS_SIMPLE, parse_movement_pattern
         
         # Verifica se utente esiste e ha business_name valido + inventario - ASYNC
         user = await async_db_manager.get_user_by_telegram_id(telegram_id)
@@ -343,28 +318,28 @@ async def _check_and_process_movement(prompt: str, telegram_id: int) -> str:
             )
             logger.info(f"[AI-MOVEMENT] Onboarding completato automaticamente per {telegram_id} (business_name={user.business_name}, {len(user_wines)} vini)")
         
-        # Cerca pattern consumo
-        for pattern in consumo_patterns:
-            match = re.search(pattern, prompt_lower)
-            if match:
-                quantity = int(match.group(1))
-                wine_name = match.group(2).strip()
-                logger.info(f"[AI-MOVEMENT] Rilevato consumo: {quantity} {wine_name}")
-                # Ritorna marker che verrà processato in bot.py
-                return f"__MOVEMENT__:consumo:{quantity}:{wine_name}"
+        # Prova prima con pattern completi (supportano numeri in lettere)
+        result = parse_single_movement(prompt)
+        if result:
+            movement_type, quantity, wine_name = result
+            logger.info(f"[AI-MOVEMENT] Rilevato {movement_type} (pattern completo): {quantity} {wine_name}")
+            return f"__MOVEMENT__:{movement_type}:{quantity}:{wine_name}"
         
-        # Cerca pattern rifornimento
-        for pattern in rifornimento_patterns:
-            match = re.search(pattern, prompt_lower)
-            if match:
-                quantity = int(match.group(1))
-                wine_name = match.group(2).strip()
-                logger.info(f"[AI-MOVEMENT] Rilevato rifornimento (regex): {quantity} {wine_name}")
-                # Ritorna marker che verrà processato in bot.py
-                return f"__MOVEMENT__:rifornimento:{quantity}:{wine_name}"
+        # Prova con pattern semplici (solo numeri interi) per compatibilità
+        result = parse_movement_pattern(prompt, CONSUMO_PATTERNS_SIMPLE, allow_word_numbers=False)
+        if result:
+            quantity, wine_name = result
+            logger.info(f"[AI-MOVEMENT] Rilevato consumo (pattern semplice): {quantity} {wine_name}")
+            return f"__MOVEMENT__:consumo:{quantity}:{wine_name}"
+        
+        result = parse_movement_pattern(prompt, RIFORNIMENTO_PATTERNS_SIMPLE, allow_word_numbers=False)
+        if result:
+            quantity, wine_name = result
+            logger.info(f"[AI-MOVEMENT] Rilevato rifornimento (pattern semplice): {quantity} {wine_name}")
+            return f"__MOVEMENT__:rifornimento:{quantity}:{wine_name}"
         
         # Se regex non ha matchato, usa AI per rilevare movimenti con variazioni linguistiche
-        logger.info(f"[AI-MOVEMENT] Regex non matchato, provo con AI per: {prompt_lower[:50]}")
+        logger.info(f"[AI-MOVEMENT] Regex non matchato, provo con AI per: {prompt[:50]}")
         ai_movement_result = await _check_movement_with_ai(prompt, telegram_id)
         if ai_movement_result:
             logger.info(f"[AI-MOVEMENT] Rilevato movimento tramite AI: {ai_movement_result}")
@@ -381,10 +356,11 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
     """
     Processa movimento in modo asincrono.
     Usato quando l'AI rileva un movimento direttamente dal prompt.
-    Fa fuzzy matching per correggere typo nel nome vino.
+    Usa fuzzy matching centralizzato sempre attivo.
     """
     try:
         from .processor_client import processor_client
+        from .movement_utils import fuzzy_match_wine_name, format_movement_error_message, format_movement_success_message
         
         # Recupera business_name - ASYNC
         user = await async_db_manager.get_user_by_telegram_id(telegram_id)
@@ -393,45 +369,8 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
         
         business_name = user.business_name
         
-        # ✅ FUZZY MATCHING: Cerca vini simili per correggere typo
-        # Prima prova ricerca normale
-        matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=10)
-        
-        if not matching_wines:
-            # Se non trova match, prova ricerca più permissiva (primi caratteri)
-            # Es. "soaver" → cerca "soav"
-            if len(wine_name) >= 4:
-                short_search = wine_name[:4].lower()
-                matching_wines = await async_db_manager.search_wines(telegram_id, short_search, limit=10)
-        
-        # Se ancora non trova, usa rapidfuzz per fuzzy matching su tutti i vini
-        if not matching_wines:
-            try:
-                from rapidfuzz import fuzz, process
-                all_wines = await async_db_manager.get_user_wines(telegram_id)
-                
-                if all_wines:
-                    # Cerca il vino più simile usando rapidfuzz
-                    wine_names = [w.name for w in all_wines]
-                    best_match = process.extractOne(
-                        wine_name,
-                        wine_names,
-                        scorer=fuzz.WRatio,  # Weighted Ratio (migliore per typo)
-                        score_cutoff=70  # Minimo 70% di similarità
-                    )
-                    
-                    if best_match:
-                        matched_name, score, _ = best_match
-                        logger.info(
-                            f"[AI-MOVEMENT] Fuzzy matching rapidfuzz: '{wine_name}' → '{matched_name}' "
-                            f"(similarità: {score:.1f}%)"
-                        )
-                        # Trova il vino corrispondente
-                        matching_wines = [w for w in all_wines if w.name == matched_name]
-            except ImportError:
-                logger.warning("[AI-MOVEMENT] rapidfuzz non disponibile, salto fuzzy matching avanzato")
-            except Exception as e:
-                logger.error(f"[AI-MOVEMENT] Errore fuzzy matching rapidfuzz: {e}")
+        # ✅ FUZZY MATCHING: Usa funzione centralizzata sempre attiva
+        matching_wines = await fuzzy_match_wine_name(telegram_id, wine_name, limit=10)
         
         if matching_wines:
             # Se trova un solo match, usa quello (correzione typo automatica)
@@ -461,38 +400,16 @@ async def _process_movement_async(telegram_id: int, wine_name: str, movement_typ
         )
         
         if result.get('status') == 'success':
-            if movement_type == 'consumo':
-                return (
-                    f"✅ **Consumo registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name')}\n"
-                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                    f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                    f"💾 **Movimento salvato** nel sistema"
-                )
-            else:
-                return (
-                    f"✅ **Rifornimento registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name')}\n"
-                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                    f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                    f"💾 **Movimento salvato** nel sistema"
-                )
+            return format_movement_success_message(
+                movement_type,
+                result.get('wine_name', wine_name),
+                quantity,
+                result.get('quantity_before', 0),
+                result.get('quantity_after', 0)
+            )
         else:
             error_msg = result.get('error', 'Errore sconosciuto')
-            if 'non trovato' in error_msg.lower():
-                return (
-                    f"❌ **Vino non trovato**\n\n"
-                    f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                    f"💡 Controlla il nome o usa `/view` per vedere i vini disponibili."
-                )
-            elif 'insufficiente' in error_msg.lower():
-                return (
-                    f"⚠️ **Quantità insufficiente**\n\n"
-                    f"{error_msg}\n\n"
-                    f"💡 Verifica la quantità o aggiorna l'inventario."
-                )
-            else:
-                return f"❌ **Errore durante l'aggiornamento**\n\n{error_msg[:200]}\n\nRiprova più tardi."
+            return format_movement_error_message(wine_name, error_msg, quantity)
                 
     except Exception as e:
         logger.error(f"[AI-MOVEMENT] Errore processamento movimento: {e}")

@@ -2,58 +2,21 @@
 Gestione movimenti inventario (consumi e rifornimenti)
 """
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from .database_async import async_db_manager
+from .movement_patterns import (
+    CONSUMO_PATTERNS, RIFORNIMENTO_PATTERNS, parse_multiple_movements,
+    parse_single_movement, word_to_number
+)
+from .movement_utils import (
+    fuzzy_match_wine_name, is_comprehension_error,
+    format_movement_error_message, format_movement_success_message
+)
 
 logger = logging.getLogger(__name__)
-
-
-def word_to_number(word: str) -> Optional[int]:
-    """
-    Converte numero in lettere italiano in numero intero.
-    Supporta numeri comuni da 1 a 20 e multipli di 10 fino a 100.
-    """
-    word_lower = word.lower().strip()
-    
-    # Dizionario numeri in lettere
-    numbers_map = {
-        # 1-20
-        'un': 1, 'uno': 1, 'una': 1,
-        'due': 2,
-        'tre': 3,
-        'quattro': 4,
-        'cinque': 5,
-        'sei': 6,
-        'sette': 7,
-        'otto': 8,
-        'nove': 9,
-        'dieci': 10,
-        'undici': 11,
-        'dodici': 12,
-        'tredici': 13,
-        'quattordici': 14,
-        'quindici': 15,
-        'sedici': 16,
-        'diciassette': 17,
-        'diciotto': 18,
-        'diciannove': 19,
-        'venti': 20,
-        # Multipli di 10
-        'trenta': 30,
-        'quaranta': 40,
-        'cinquanta': 50,
-        'sessanta': 60,
-        'settanta': 70,
-        'ottanta': 80,
-        'novanta': 90,
-        'cento': 100
-    }
-    
-    return numbers_map.get(word_lower)
 
 
 def _identify_differentiating_field(wines: List[Any]) -> Tuple[Optional[str], str]:
@@ -166,108 +129,13 @@ class InventoryMovementManager:
     """Gestore movimenti inventario"""
     
     def __init__(self):
-        # Pattern per riconoscere movimenti con numeri (cifre o lettere)
-        # Pattern alternativi: (\d+) per numeri, (un|uno|una|due|tre|...) per lettere
-        number_pattern = r'(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)'
-        
-        # Pattern per riconoscere movimenti (ordinati dalla più specifica alla più generica)
-        self.consumo_patterns = [
-            r'ho venduto ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho consumato ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho bevuto ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho venduto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
-            r'ho consumato ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
-            r'ho bevuto ' + number_pattern + r' (.+)',    # Senza "bottiglie di"
-            r'venduto ' + number_pattern + r' (.+)',
-            r'consumato ' + number_pattern + r' (.+)',
-            r'bevuto ' + number_pattern + r' (.+)',
-            number_pattern + r' bottiglie? di (.+) vendute?',
-            number_pattern + r' bottiglie? di (.+) consumate?',
-            number_pattern + r' bottiglie? di (.+) bevute?'
-        ]
-        
-        self.rifornimento_patterns = [
-            r'ho ricevuto ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho comprato ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho aggiunto ' + number_pattern + r' bottiglie? di (.+)',
-            r'ho ricevuto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
-            r'ho comprato ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
-            r'ho aggiunto ' + number_pattern + r' (.+)',  # Senza "bottiglie di"
-            r'ricevuto ' + number_pattern + r' (.+)',
-            r'comprato ' + number_pattern + r' (.+)',
-            r'aggiunto ' + number_pattern + r' (.+)',
-            number_pattern + r' bottiglie? di (.+) ricevute?',
-            number_pattern + r' bottiglie? di (.+) comprate?',
-            number_pattern + r' bottiglie? di (.+) aggiunte?'
-        ]
+        # Usa pattern centralizzati da movement_patterns
+        self.consumo_patterns = CONSUMO_PATTERNS
+        self.rifornimento_patterns = RIFORNIMENTO_PATTERNS
     
     def _parse_multiple_movements(self, message_text: str, movement_type: str) -> List[Tuple[int, str]]:
-        """
-        Analizza un messaggio per trovare movimenti multipli.
-        Esempio: "ho consumato 1 etna e 1 fiano" -> [(1, "etna"), (1, "fiano")]
-        
-        Returns:
-            Lista di tuple (quantity, wine_name)
-        """
-        movements = []
-        number_pattern = r'(\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)'
-        
-        # Pattern per riconoscere il prefisso del movimento (es. "ho consumato", "consumato", ecc.)
-        if movement_type == 'consumo':
-            prefix_patterns = [
-                r'ho venduto|ho consumato|ho bevuto|venduto|consumato|bevuto',
-                r'ho venduto|ho consumato|ho bevuto'
-            ]
-        else:
-            prefix_patterns = [
-                r'ho ricevuto|ho comprato|ho aggiunto|ricevuto|comprato|aggiunto',
-                r'ho ricevuto|ho comprato|ho aggiunto'
-            ]
-        
-        # Cerca il prefisso del movimento
-        prefix_match = None
-        for prefix_pattern in prefix_patterns:
-            prefix_match = re.search(prefix_pattern, message_text, re.IGNORECASE)
-            if prefix_match:
-                break
-        
-        if not prefix_match:
-            return movements
-        
-        # Estrai la parte dopo il prefisso
-        prefix_end = prefix_match.end()
-        rest_of_message = message_text[prefix_end:].strip()
-        
-        # Pattern per riconoscere "X vino" o "X bottiglie di vino"
-        # Supporta anche "e" come separatore: "1 etna e 1 fiano"
-        wine_pattern = rf'{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?)(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*(?:\s+e\s+{number_pattern}\s+(?:bottiglie?\s+di\s+)?([^e]+?))*'
-        
-        # Cerca tutti i movimenti usando un approccio più semplice: split per " e " dopo il prefisso
-        # Pattern: numero + (bottiglie di)? + nome vino
-        parts = re.split(r'\s+e\s+', rest_of_message)
-        
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            
-            # Cerca pattern: numero + (bottiglie di)? + nome vino
-            match = re.match(rf'^{number_pattern}\s+(?:bottiglie?\s+di\s+)?(.+)$', part, re.IGNORECASE)
-            if match:
-                quantity_str = match.group(1).strip()
-                wine_name = match.group(2).strip()
-                
-                # Converti quantità
-                if quantity_str.isdigit():
-                    quantity = int(quantity_str)
-                else:
-                    quantity = word_to_number(quantity_str)
-                    if quantity is None:
-                        continue
-                
-                movements.append((quantity, wine_name))
-        
-        return movements
+        """Delega a funzione centralizzata"""
+        return parse_multiple_movements(message_text, movement_type)
     
     async def process_movement_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Processa un messaggio per riconoscere movimenti inventario"""
@@ -318,7 +186,6 @@ class InventoryMovementManager:
                 for qty, wine in multiple_consumi
             ]
             context.user_data['original_message'] = original_message
-            context.user_data['current_movement_index'] = 0  # Inizia dal primo movimento
             context.user_data['completed_movements'] = []  # Traccia i movimenti completati per il sommario
             # Processa il primo movimento (gli altri verranno processati dopo la selezione)
             return await self._process_consumo(update, context, telegram_id, multiple_consumi[0][1], multiple_consumi[0][0])
@@ -331,47 +198,18 @@ class InventoryMovementManager:
                 for qty, wine in multiple_rifornimenti
             ]
             context.user_data['original_message'] = original_message
-            context.user_data['current_movement_index'] = 0  # Inizia dal primo movimento
             context.user_data['completed_movements'] = []  # Traccia i movimenti completati per il sommario
             # Processa il primo movimento (gli altri verranno processati dopo la selezione)
             return await self._process_rifornimento(update, context, telegram_id, multiple_rifornimenti[0][1], multiple_rifornimenti[0][0])
         
-        # Cerca pattern di consumo singolo
-        for pattern in self.consumo_patterns:
-            match = re.search(pattern, message_text, re.IGNORECASE)
-            if match:
-                quantity_str = match.group(1).strip()
-                wine_name = match.group(2).strip()
-                
-                # Converti quantità (numero o parola) in intero
-                if quantity_str.isdigit():
-                    quantity = int(quantity_str)
-                else:
-                    quantity = word_to_number(quantity_str)
-                    if quantity is None:
-                        logger.warning(f"Numero in lettere non riconosciuto: '{quantity_str}'")
-                        continue
-                
-                logger.info(f"Matched consumo pattern: '{pattern}' -> quantity={quantity} (from '{quantity_str}'), wine={wine_name}")
+        # Usa funzione centralizzata per pattern matching
+        result = parse_single_movement(message_text)
+        if result:
+            movement_type, quantity, wine_name = result
+            logger.info(f"Matched {movement_type} pattern -> quantity={quantity}, wine={wine_name}")
+            if movement_type == 'consumo':
                 return await self._process_consumo(update, context, telegram_id, wine_name, quantity)
-        
-        # Cerca pattern di rifornimento singolo
-        for pattern in self.rifornimento_patterns:
-            match = re.search(pattern, message_text, re.IGNORECASE)
-            if match:
-                quantity_str = match.group(1).strip()
-                wine_name = match.group(2).strip()
-                
-                # Converti quantità (numero o parola) in intero
-                if quantity_str.isdigit():
-                    quantity = int(quantity_str)
-                else:
-                    quantity = word_to_number(quantity_str)
-                    if quantity is None:
-                        logger.warning(f"Numero in lettere non riconosciuto: '{quantity_str}'")
-                        continue
-                
-                logger.info(f"Matched rifornimento pattern: '{pattern}' -> quantity={quantity} (from '{quantity_str}'), wine={wine_name}")
+            else:
                 return await self._process_rifornimento(update, context, telegram_id, wine_name, quantity)
         
         logger.debug(f"No movement pattern matched for message: {message_text}")
@@ -466,13 +304,13 @@ class InventoryMovementManager:
             
             # Processor ora ritorna risultato immediatamente (sincrono)
             if result.get('status') == 'success':
-                # Job completato immediatamente (elaborazione sincrona)
-                success_message = (
-                    f"✅ **Consumo registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
-                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                    f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                    f"💾 **Movimento salvato** nel sistema"
+                # Usa funzione centralizzata per messaggio successo
+                success_message = format_movement_success_message(
+                    'consumo',
+                    result.get('wine_name', exact_wine_name),
+                    quantity,
+                    result.get('quantity_before', 0),
+                    result.get('quantity_after', 0)
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
                 return True
@@ -481,7 +319,7 @@ class InventoryMovementManager:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 
                 # ✅ Se è un errore di comprensione, NON mostrare errore qui, ritorna False per passare all'AI
-                if self._is_comprehension_error(error_msg):
+                if is_comprehension_error(error_msg):
                     logger.info(
                         f"[MOVEMENT] Errore comprensione in process_movement_message: '{error_msg}' - "
                         f"Ritorno False per passare all'AI"
@@ -489,7 +327,8 @@ class InventoryMovementManager:
                     return False  # ✅ Passa all'AI come fallback
                 
                 # Errore tecnico, mostra e termina
-                await self._handle_movement_error(update, wine_name, error_msg, quantity)
+                error_message = format_movement_error_message(wine_name, error_msg, quantity)
+                await update.message.reply_text(error_message, parse_mode='Markdown')
                 return True
             
         except Exception as e:
@@ -612,13 +451,13 @@ class InventoryMovementManager:
             
             # Processor ora ritorna risultato immediatamente (sincrono)
             if result.get('status') == 'success':
-                # Job completato immediatamente (elaborazione sincrona)
-                success_message = (
-                    f"✅ **Rifornimento registrato**\n\n"
-                    f"🍷 **Vino:** {result.get('wine_name', exact_wine_name)}\n"
-                    f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                    f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                    f"💾 **Movimento salvato** nel sistema"
+                # Usa funzione centralizzata per messaggio successo
+                success_message = format_movement_success_message(
+                    'rifornimento',
+                    result.get('wine_name', exact_wine_name),
+                    quantity,
+                    result.get('quantity_before', 0),
+                    result.get('quantity_after', 0)
                 )
                 await update.message.reply_text(success_message, parse_mode='Markdown')
                 return True
@@ -627,7 +466,7 @@ class InventoryMovementManager:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 
                 # ✅ Se è un errore di comprensione, NON mostrare errore qui, ritorna False per passare all'AI
-                if self._is_comprehension_error(error_msg):
+                if is_comprehension_error(error_msg):
                     logger.info(
                         f"[MOVEMENT] Errore comprensione in process_movement_message: '{error_msg}' - "
                         f"Ritorno False per passare all'AI"
@@ -635,7 +474,8 @@ class InventoryMovementManager:
                     return False  # ✅ Passa all'AI come fallback
                 
                 # Errore tecnico, mostra e termina
-                await self._handle_movement_error(update, wine_name, error_msg, quantity)
+                error_message = format_movement_error_message(wine_name, error_msg, quantity)
+                await update.message.reply_text(error_message, parse_mode='Markdown')
                 return True
             
         except Exception as e:
@@ -669,204 +509,6 @@ class InventoryMovementManager:
             
             return True
     
-    async def _poll_movement_job_and_notify(
-        self,
-        telegram_id: int,
-        job_id: str,
-        chat_id: int,
-        wine_name: str,
-        quantity: int,
-        movement_type: str,
-        bot
-    ):
-        """
-        Background task per polling job movimento e notifica utente quando completato.
-        Non blocca handler principale.
-        """
-        from .processor_client import processor_client
-        
-        try:
-            logger.info(
-                f"[MOVEMENT] Inizio polling job {job_id} | "
-                f"telegram_id={telegram_id}, wine_name='{wine_name}', movement_type={movement_type}"
-            )
-            
-            # Polling job in background
-            result = await processor_client.wait_for_job_completion(
-                job_id=job_id,
-                max_wait_seconds=300,  # 5 minuti massimo per un movimento
-                poll_interval=2  # Poll ogni 2 secondi (movimenti sono veloci)
-            )
-            
-            logger.info(
-                f"[MOVEMENT] Polling completato per job {job_id} | "
-                f"result_status={result.get('status')}, result_keys={list(result.keys())}"
-            )
-            
-            # Estrai dati dal campo 'result' annidato se presente
-            result_status = result.get('status')
-            
-            if result_status == 'completed':
-                # Job completato - estrai dati da result
-                result_data = result.get('result', {})
-                
-                logger.info(
-                    f"[MOVEMENT] Job {job_id} completed | "
-                    f"result_data_type={type(result_data)}, result_data_keys={list(result_data.keys()) if isinstance(result_data, dict) else 'N/A'}"
-                )
-                
-                # Se result è una stringa JSON, parsala
-                if isinstance(result_data, str):
-                    import json
-                    try:
-                        result_data = json.loads(result_data)
-                        logger.info(f"[MOVEMENT] Parsed JSON result_data per job {job_id}")
-                    except Exception as json_err:
-                        logger.error(f"[MOVEMENT] Errore parsing JSON result_data per job {job_id}: {json_err}")
-                        result_data = {}
-                
-                if result_data.get('status') == 'success':
-                    logger.info(
-                        f"[MOVEMENT] Job {job_id} success | "
-                        f"wine_name={result_data.get('wine_name')}, "
-                        f"quantity_before={result_data.get('quantity_before')}, "
-                        f"quantity_after={result_data.get('quantity_after')}"
-                    )
-                    wine_name_result = result_data.get('wine_name', wine_name)
-                    quantity_before = result_data.get('quantity_before', 0)
-                    quantity_after = result_data.get('quantity_after', 0)
-                    
-                    if movement_type == 'consumo':
-                        message = (
-                            f"✅ **Consumo registrato**\n\n"
-                            f"🍷 **Vino:** {wine_name_result}\n"
-                            f"📦 **Quantità:** {quantity_before} → {quantity_after} bottiglie\n"
-                            f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                            f"💾 **Movimento salvato** nel sistema"
-                        )
-                    else:  # rifornimento
-                        message = (
-                            f"✅ **Rifornimento registrato**\n\n"
-                            f"🍷 **Vino:** {wine_name_result}\n"
-                            f"📦 **Quantità:** {quantity_before} → {quantity_after} bottiglie\n"
-                            f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                            f"💾 **Movimento salvato** nel sistema"
-                        )
-                    
-                    await bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
-                else:
-                    # Job completato ma con errore
-                    error_msg = result_data.get('error', result_data.get('error_message', 'Errore sconosciuto'))
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=f"❌ **Errore durante l'elaborazione**\n\n{error_msg[:200]}"
-                    )
-            elif result_status == 'failed' or result_status == 'error':
-                # Job fallito
-                error_msg = result.get('error', 'Errore sconosciuto')
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ **Movimento fallito**\n\n{error_msg[:200]}"
-                )
-            elif result_status == 'timeout':
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"⏱️ **Timeout**\n\nIl movimento sta impiegando più tempo del previsto. Verifica lo stato più tardi."
-                )
-            else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"⚠️ **Stato sconosciuto**\n\nIl movimento è in stato: {result_status}"
-                )
-                
-        except Exception as e:
-            logger.error(f"Errore in _poll_movement_job_and_notify per job {job_id}: {e}", exc_info=True)
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ **Errore durante il polling**\n\nSi è verificato un errore. Controlla lo stato del movimento più tardi."
-                )
-            except:
-                pass
-    
-    async def _handle_movement_error(
-        self,
-        update: Update,
-        wine_name: str,
-        error_msg: str,
-        quantity: int
-    ):
-        """Gestisce errori durante i movimenti"""
-        # Cerca messaggi di errore specifici nel result_data
-        if 'wine_not_found' in error_msg.lower() or 'non trovato' in error_msg.lower():
-            await update.message.reply_text(
-                f"❌ **Vino non trovato**\n\n"
-                f"Non ho trovato '{wine_name}' nel tuo inventario.\n"
-                f"💡 Controlla il nome o usa `/view` per vedere i vini disponibili.\n\n"
-                f"🆕 **Per aggiungere un nuovo vino:** usa `/aggiungi`"
-            )
-        elif 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
-            await update.message.reply_text(
-                f"⚠️ **Quantità insufficiente**\n\n"
-                f"🍷 Richieste: {quantity} bottiglie\n\n"
-                f"💡 Verifica la quantità disponibile con `/view`."
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ **Errore durante l'aggiornamento**\n\n"
-                f"{error_msg[:200]}\n\n"
-                f"Riprova più tardi."
-            )
-    
-    def _is_comprehension_error(self, error_msg: str) -> bool:
-        """
-        Identifica se un errore è un errore di comprensione (AI può risolvere).
-        Stessa logica di bot.py per coerenza.
-        """
-        if not error_msg:
-            return False
-        
-        error_lower = error_msg.lower()
-        
-        # Errori di comprensione (AI può risolvere)
-        comprehension_indicators = [
-            "wine not found",
-            "vino non trovato",
-            "non ho trovato",
-            "non trovato",
-            "not found",
-            "nessun vino",
-            "nessun risultato",
-            "no results",
-            "errore sconosciuto",
-        ]
-        
-        # Errori tecnici (NON passare all'AI)
-        technical_indicators = [
-            "business name non trovato",
-            "business name non configurato",
-            "onboarding",
-            "timeout",
-            "http error",
-            "http client error",
-            "connection error",
-            "errore connessione",
-            "nome vino o quantità non validi",
-            "quantità non valida",
-            "telegram_id non trovato",
-        ]
-        
-        # Controlla prima errori tecnici (priorità)
-        for indicator in technical_indicators:
-            if indicator in error_lower:
-                return False
-        
-        # Controlla errori di comprensione
-        for indicator in comprehension_indicators:
-            if indicator in error_lower:
-                return True
-        
-        return False
     
     def _find_matching_wine(self, wines: List, wine_name: str) -> Optional[Any]:
         """Trova un vino che corrisponde al nome dato"""
@@ -1008,22 +650,19 @@ class InventoryMovementManager:
             # Pulisci il context
             context.user_data.pop('pending_movements', None)
             context.user_data.pop('original_message', None)
-            context.user_data.pop('current_movement_index', None)
             context.user_data.pop('completed_movements', None)
             return
         
         # Prendi il primo movimento dalla lista (quelli già processati sono stati rimossi)
         next_movement = pending_movements[0]
-        # Aggiorna l'indice corrente
-        context.user_data['current_movement_index'] = 0
         
         logger.info(
             f"[MOVEMENT] Processando movimento multiplo pendente ({len(pending_movements)} rimanenti): "
             f"{next_movement['type']} {next_movement['quantity']} {next_movement['wine_name']}"
         )
         
-        # Cerca i vini corrispondenti
-        matching_wines = await async_db_manager.search_wines(
+        # Usa fuzzy matching migliorato (sempre attivo)
+        matching_wines = await fuzzy_match_wine_name(
             telegram_id, next_movement['wine_name'], limit=50
         )
         
@@ -1070,22 +709,13 @@ class InventoryMovementManager:
             )
             
             if result.get('status') == 'success':
-                if next_movement['type'] == 'consumo':
-                    msg = (
-                        f"✅ **Consumo registrato**\n\n"
-                        f"🍷 **Vino:** {result.get('wine_name')}\n"
-                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                        f"📉 **Consumate:** {next_movement['quantity']} bottiglie\n\n"
-                        f"💾 **Movimento salvato** nel sistema"
-                    )
-                else:
-                    msg = (
-                        f"✅ **Rifornimento registrato**\n\n"
-                        f"🍷 **Vino:** {result.get('wine_name')}\n"
-                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                        f"📈 **Aggiunte:** {next_movement['quantity']} bottiglie\n\n"
-                        f"💾 **Movimento salvato** nel sistema"
-                    )
+                msg = format_movement_success_message(
+                    next_movement['type'],
+                    result.get('wine_name', exact_wine_name),
+                    next_movement['quantity'],
+                    result.get('quantity_before', 0),
+                    result.get('quantity_after', 0)
+                )
                 await message.reply_text(msg, parse_mode='Markdown')
                 
                 # Aggiungi il movimento completato alla lista per il sommario
@@ -1102,7 +732,6 @@ class InventoryMovementManager:
                 # Rimuovi questo movimento e continua con il prossimo
                 pending_movements.pop(0)
                 context.user_data['pending_movements'] = pending_movements
-                context.user_data.pop('current_movement_index', None)
                 
                 # Processa ricorsivamente il prossimo movimento
                 if pending_movements:
@@ -1112,7 +741,6 @@ class InventoryMovementManager:
                     await self._show_final_summary(message, context)
                     context.user_data.pop('pending_movements', None)
                     context.user_data.pop('original_message', None)
-                    context.user_data.pop('current_movement_index', None)
                     context.user_data.pop('completed_movements', None)
             else:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
@@ -1122,7 +750,6 @@ class InventoryMovementManager:
                 # Rimuovi questo movimento dalla lista anche se fallito
                 pending_movements.pop(0)
                 context.user_data['pending_movements'] = pending_movements
-                context.user_data.pop('current_movement_index', None)
                 
                 # Continua con il prossimo movimento se ce ne sono
                 if pending_movements:
@@ -1132,7 +759,6 @@ class InventoryMovementManager:
                     await self._show_final_summary(message, context)
                     context.user_data.pop('pending_movements', None)
                     context.user_data.pop('original_message', None)
-                    context.user_data.pop('current_movement_index', None)
                     context.user_data.pop('completed_movements', None)
         else:
             # Nessuna corrispondenza
@@ -1143,7 +769,6 @@ class InventoryMovementManager:
             # Rimuovi questo movimento e continua con il prossimo
             pending_movements.pop(0)
             context.user_data['pending_movements'] = pending_movements
-            context.user_data.pop('current_movement_index', None)
             if pending_movements:
                 await self._process_next_pending_movement(message, context, telegram_id, business_name)
             else:
@@ -1151,7 +776,6 @@ class InventoryMovementManager:
                 logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
                 context.user_data.pop('pending_movements', None)
                 context.user_data.pop('original_message', None)
-                context.user_data.pop('current_movement_index', None)
     
     async def process_movement_from_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
                                              wine_id: int, movement_type: str, quantity: int) -> bool:
@@ -1193,44 +817,31 @@ class InventoryMovementManager:
             # Conferma selezione
             await query.answer(f"🔄 Elaborazione {movement_type} per {selected_wine.name}...")
             
-            # Controlla se ci sono movimenti multipli pendenti PRIMA di processare
+            # Controlla se ci sono movimenti multipli pendenti
             pending_movements = context.user_data.get('pending_movements', [])
-            current_movement_index = context.user_data.get('current_movement_index', 0)
+            movement_to_remove = None
             
             logger.info(
                 f"[MOVEMENT] Callback ricevuto: {movement_type} {quantity}, "
-                f"movimenti pendenti: {len(pending_movements)}, indice corrente: {current_movement_index}"
+                f"movimenti pendenti: {len(pending_movements)}"
             )
             
-            # Se ci sono movimenti pendenti, identifica quale movimento stiamo processando
+            # Identifica quale movimento stiamo processando cercando nella lista
             if pending_movements:
-                # Cerca il movimento corrispondente nella lista (per tipo e quantità)
-                found_index = None
-                for idx, mov in enumerate(pending_movements):
+                # Cerca il movimento corrispondente (per tipo, quantità e nome vino approssimativo)
+                for mov in pending_movements:
                     if mov['type'] == movement_type and mov['quantity'] == quantity:
-                        found_index = idx
-                        break
+                        # Verifica anche che il nome vino corrisponda approssimativamente
+                        if selected_wine.name.lower() in mov['wine_name'].lower() or mov['wine_name'].lower() in selected_wine.name.lower():
+                            movement_to_remove = mov
+                            break
                 
-                if found_index is not None:
-                    current_movement_index = found_index
-                    context.user_data['current_movement_index'] = current_movement_index
-                    logger.info(
-                        f"[MOVEMENT] Movimento identificato all'indice {current_movement_index}: "
-                        f"{pending_movements[current_movement_index]['wine_name']}"
-                    )
-                else:
-                    logger.warning(
-                        f"[MOVEMENT] Movimento callback non trovato nella lista pendenti. "
-                        f"Callback: {movement_type} {quantity}, Pendenti: {pending_movements}"
-                    )
-                    # Se non trovato, usa l'indice corrente se valido
-                    if current_movement_index < len(pending_movements):
-                        logger.info(f"[MOVEMENT] Usando indice corrente {current_movement_index}")
-                    else:
-                        # Se l'indice non è valido, usa il primo movimento
-                        current_movement_index = 0
-                        context.user_data['current_movement_index'] = 0
-                        logger.warning(f"[MOVEMENT] Indice non valido, reset a 0")
+                # Se non trovato esatto match, usa il primo movimento del tipo corretto
+                if not movement_to_remove:
+                    for mov in pending_movements:
+                        if mov['type'] == movement_type and mov['quantity'] == quantity:
+                            movement_to_remove = mov
+                            break
             
             # Invia movimento al processor
             result = await processor_client.process_movement(
@@ -1242,23 +853,13 @@ class InventoryMovementManager:
             )
             
             if result.get('status') == 'success':
-                if movement_type == 'consumo':
-                    success_message = (
-                        f"✅ **Consumo registrato**\n\n"
-                        f"🍷 **Vino:** {result.get('wine_name')}\n"
-                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                        f"📉 **Consumate:** {quantity} bottiglie\n\n"
-                        f"💾 **Movimento salvato** nel sistema"
-                    )
-                else:
-                    success_message = (
-                        f"✅ **Rifornimento registrato**\n\n"
-                        f"🍷 **Vino:** {result.get('wine_name')}\n"
-                        f"📦 **Quantità:** {result.get('quantity_before')} → {result.get('quantity_after')} bottiglie\n"
-                        f"📈 **Aggiunte:** {quantity} bottiglie\n\n"
-                        f"💾 **Movimento salvato** nel sistema"
-                    )
-                
+                success_message = format_movement_success_message(
+                    movement_type,
+                    result.get('wine_name', selected_wine.name),
+                    quantity,
+                    result.get('quantity_before', 0),
+                    result.get('quantity_after', 0)
+                )
                 await query.edit_message_text(success_message, parse_mode='Markdown')
                 
                 # Aggiungi il movimento completato alla lista per il sommario
@@ -1274,48 +875,40 @@ class InventoryMovementManager:
                 
                 # Se ci sono movimenti multipli pendenti, rimuovi quello appena processato e continua
                 if pending_movements:
-                    # Rimuovi il movimento appena processato dalla lista
-                    if current_movement_index < len(pending_movements):
-                        pending_movements.pop(current_movement_index)
-                        context.user_data['pending_movements'] = pending_movements
-                        # Reset l'indice corrente
-                        context.user_data.pop('current_movement_index', None)
-                        
-                        logger.info(
-                            f"[MOVEMENT] Movimento processato, rimangono {len(pending_movements)} movimenti pendenti"
+                    # Rimuovi il movimento identificato dalla lista (se trovato)
+                    if movement_to_remove and movement_to_remove in pending_movements:
+                        pending_movements.remove(movement_to_remove)
+                    elif pending_movements:
+                        # Se non trovato esatto match, rimuovi il primo movimento del tipo corretto
+                        for mov in pending_movements[:]:
+                            if mov['type'] == movement_type and mov['quantity'] == quantity:
+                                pending_movements.remove(mov)
+                                break
+                    
+                    context.user_data['pending_movements'] = pending_movements
+                    
+                    logger.info(
+                        f"[MOVEMENT] Movimento processato, rimangono {len(pending_movements)} movimenti pendenti"
+                    )
+                    
+                    # Se ci sono ancora movimenti pendenti, processa il prossimo
+                    if pending_movements:
+                        # Usa query.message per inviare il prossimo messaggio
+                        await self._process_next_pending_movement(
+                            query.message, context, telegram_id, user.business_name
                         )
-                        
-                        # Se ci sono ancora movimenti pendenti, processa il prossimo
-                        if pending_movements:
-                            # Usa query.message per inviare il prossimo messaggio
-                            await self._process_next_pending_movement(
-                                query.message, context, telegram_id, user.business_name
-                            )
-                        else:
-                            # Tutti i movimenti sono stati processati - mostra sommario finale
-                            await self._show_final_summary(query.message, context)
-                            logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
-                            context.user_data.pop('pending_movements', None)
-                            context.user_data.pop('original_message', None)
-                            context.user_data.pop('current_movement_index', None)
-                            context.user_data.pop('completed_movements', None)
+                    else:
+                        # Tutti i movimenti sono stati processati - mostra sommario finale
+                        await self._show_final_summary(query.message, context)
+                        logger.info("[MOVEMENT] Tutti i movimenti multipli sono stati processati")
+                        context.user_data.pop('pending_movements', None)
+                        context.user_data.pop('original_message', None)
+                        context.user_data.pop('completed_movements', None)
             else:
                 error_msg = result.get('error', result.get('error_message', 'Errore sconosciuto'))
                 
-                if 'insufficient' in error_msg.lower() or 'insufficiente' in error_msg.lower():
-                    available_qty = result.get('available_quantity', 'N/A')
-                    await query.edit_message_text(
-                        f"⚠️ **Quantità insufficiente**\n\n"
-                        f"📦 Disponibili: {available_qty} bottiglie\n"
-                        f"🍷 Richieste: {quantity} bottiglie",
-                        parse_mode='Markdown'
-                    )
-                else:
-                    await query.edit_message_text(
-                        f"❌ **Errore durante l'aggiornamento**\n\n"
-                        f"{error_msg[:200]}",
-                        parse_mode='Markdown'
-                    )
+                error_message = format_movement_error_message(selected_wine.name, error_msg, quantity)
+                await query.edit_message_text(error_message, parse_mode='Markdown')
             
             return True
             
