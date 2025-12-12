@@ -251,6 +251,58 @@ def _is_informational_query(prompt: str) -> tuple[Optional[str], Optional[str]]:
     return (None, None)
 
 
+async def _handle_qualitative_query_fallback(telegram_id: int, prompt: str) -> Optional[str]:
+    """
+    Tenta di interpretare una query qualitativa quando l'AI non ha trovato una funzione diretta.
+    Gestisce domande soggettive come "più pregiato", "migliore", "di valore", ecc.
+    
+    Args:
+        telegram_id: ID Telegram utente
+        prompt: Testo della query originale
+    
+    Returns:
+        Risposta formattata o None se non riesce a interpretare
+    """
+    try:
+        prompt_lower = prompt.lower().strip()
+        
+        # Mappa di pattern qualitativi a query_type e field
+        qualitative_patterns = [
+            # Pregiato/Valore/Prestigio → max selling_price
+            (r'\b(più\s+)?pregiat[oi]|(di\s+)?valore|prestigio|miglior[ei]|qualità|più\s+costos[oi]|più\s+cara', 'max', 'selling_price'),
+            # Economico → min selling_price
+            (r'(più\s+)?economic[oi]|più\s+baratt[aio]|meno\s+costos[oi]|meno\s+cara', 'min', 'selling_price'),
+            # Più bottiglie/quantità → max quantity
+            (r'(più|maggiore)\s+(bottiglie|quantità|pezzi)|più\s+bottiglie', 'max', 'quantity'),
+            # Meno bottiglie → min quantity
+            (r'(meno|minore)\s+(bottiglie|quantità|pezzi)', 'min', 'quantity'),
+            # Più pagato/costo acquisto → max cost_price
+            (r'più\s+pagat[oi]|costo\s+(più|maggiore)|speso\s+(più|di\s+più)', 'max', 'cost_price'),
+            # Meno pagato → min cost_price
+            (r'meno\s+pagat[oi]|costo\s+(meno|minore)', 'min', 'cost_price'),
+            # Più recente/nuovo → max vintage
+            (r'più\s+(recente|nuov[oi]|giovane)', 'max', 'vintage'),
+            # Più vecchio/antico → min vintage
+            (r'più\s+(vecchi[oi]|antich[oi]|anzian[oi])', 'min', 'vintage'),
+        ]
+        
+        # Cerca pattern nella query
+        for pattern, query_type, field in qualitative_patterns:
+            if re.search(pattern, prompt_lower):
+                logger.info(f"[QUALITATIVE_FALLBACK] Pattern trovato: '{pattern}' → {query_type} {field}")
+                # Usa la funzione esistente per gestire la query
+                result = await _handle_informational_query(telegram_id, query_type, field)
+                if result:
+                    return result
+        
+        # Se non trova pattern, ritorna None (usa risposta AI originale)
+        return None
+        
+    except Exception as e:
+        logger.error(f"Errore in _handle_qualitative_query_fallback: {e}", exc_info=True)
+        return None
+
+
 async def _handle_informational_query(telegram_id: int, query_type: str, field: str) -> Optional[str]:
     """
     Gestisce una domanda informativa generica e ritorna la risposta formattata.
@@ -1281,14 +1333,16 @@ REGOLA D'ORO: Prima di rispondere a qualsiasi domanda informativa, consulta SEMP
                 "function": {
                     "name": "get_wine_by_criteria",
                     "description": """Trova il vino che corrisponde a criteri specifici (min/max per quantità, prezzo, annata).
-                    Usa questa funzione quando l'utente chiede:
+                    Usa questa funzione quando l'utente chiede domande qualitative o comparative:
                     - "quale vino ha meno quantità" → query_type: "min", field: "quantity"
-                    - "quale è il più costoso" → query_type: "max", field: "selling_price"
+                    - "quale è il più costoso/pregiato/migliore/valore/prestigio" → query_type: "max", field: "selling_price"
                     - "quale ha più bottiglie" → query_type: "max", field: "quantity"
                     - "quale è il più economico" → query_type: "min", field: "selling_price"
                     - "quale vino ho pagato di più" → query_type: "max", field: "cost_price"
-                    - "quale è il più recente" → query_type: "max", field: "vintage"
-                    - "quale è il più vecchio" → query_type: "min", field: "vintage"
+                    - "quale è il più recente/nuovo" → query_type: "max", field: "vintage"
+                    - "quale è il più vecchio/antico" → query_type: "min", field: "vintage"
+                    
+                    IMPORTANTE: "pregiato", "migliore", "di valore", "prestigioso" generalmente si riferiscono al prezzo più alto (selling_price max).
                     """,
                     "parameters": {
                         "type": "object",
@@ -1633,6 +1687,22 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
         if not content.strip():
             logger.error("Risposta vuota da OpenAI")
             return "⚠️ Errore nella generazione della risposta. Riprova."
+        
+        # ✅ FALLBACK: Se la risposta contiene errori "vino non trovato" o simili,
+        # prova a interpretare la query come domanda qualitativa e accedi al database
+        content_lower = content.lower()
+        if telegram_id and any(phrase in content_lower for phrase in [
+            "vino non trovato", "non ho trovato", "non trovato", "not found",
+            "non è presente", "non presente nell'inventario"
+        ]):
+            logger.info(f"[FALLBACK] AI ha risposto con 'non trovato', provo interpretazione query qualitativa: {prompt}")
+            
+            # Prova a interpretare la domanda come query qualitativa
+            fallback_response = await _handle_qualitative_query_fallback(telegram_id, prompt)
+            if fallback_response:
+                logger.info(f"[FALLBACK] Trovata risposta qualitativa, uso quella invece di risposta AI")
+                return fallback_response
+        
         return content.strip()
         
     except OpenAIError as e:
