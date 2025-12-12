@@ -283,6 +283,17 @@ class AsyncDatabaseManager:
                 # Criteri: contiene "del", "di", "da" O inizia con "ca" (es. "ca del bosco")
                 is_likely_producer = any(word in search_term_clean for word in [' del ', ' di ', ' da ', 'ca ', 'ca\'', 'castello', 'tenuta', 'azienda'])
                 
+                # Determina se il termine è numerico (deve essere fatto PRIMA di usarlo)
+                search_numeric = None
+                search_float = None
+                try:
+                    search_numeric = int(search_term_clean)
+                except ValueError:
+                    try:
+                        search_float = float(search_term_clean.replace(',', '.'))
+                    except ValueError:
+                        pass
+                
                 # Determina se la query è probabilmente un nome di uvaggio
                 # Criteri: singola parola (o parole legate da apostrofo/trattino), non produttore, non numerico
                 # Uvaggi italiani comuni (lista parziale)
@@ -311,16 +322,6 @@ class AsyncDatabaseManager:
                 
                 search_pattern = f"%{search_term_clean}%"
                 search_pattern_unaccent = f"%{search_term_unaccent}%"
-                
-                search_numeric = None
-                search_float = None
-                try:
-                    search_numeric = int(search_term_clean)
-                except ValueError:
-                    try:
-                        search_float = float(search_term_clean.replace(',', '.'))
-                    except ValueError:
-                        pass
                 
                 # Condizioni base: match completo su frase (priorità alta)
                 # Include anche grape_variety (uvaggio) per trovare vini cercando per vitigno
