@@ -2,6 +2,7 @@ import os
 import logging
 from aiohttp import web
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from telegram.error import Conflict, RetryAfter, NetworkError
 from .ai import get_ai_response
 # db_manager rimosso - usa async_db_manager
 from .new_onboarding import new_onboarding_manager
@@ -1372,6 +1373,55 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document_with_onboarding))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_onboarding))
 
+    # Error handler globale
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Gestisce tutti gli errori non gestiti nel bot"""
+        try:
+            error = context.error
+            
+            # Gestione specifica per Conflict (altra istanza bot attiva)
+            if isinstance(error, Conflict):
+                logger.warning(
+                    f"Conflict rilevato: {error}. "
+                    f"Probabilmente un'altra istanza del bot è in esecuzione. "
+                    f"Questo è normale durante i deploy se il vecchio processo non è ancora terminato."
+                )
+                return  # Non loggare come errore critico, è gestibile
+            
+            # Gestione per RetryAfter (rate limiting)
+            if isinstance(error, RetryAfter):
+                logger.warning(f"Rate limit raggiunto, retry dopo {error.retry_after} secondi")
+                return
+            
+            # Gestione per NetworkError (problemi di rete temporanei)
+            if isinstance(error, NetworkError):
+                logger.warning(f"Network error temporaneo: {error}")
+                return
+            
+            # Log dettagliato per altri errori
+            logger.error(
+                f"Errore non gestito: {error}",
+                exc_info=context.error
+            )
+            
+            # Se c'è un update valido, prova a notificare l'utente
+            if update and hasattr(update, 'effective_message') and update.effective_message:
+                try:
+                    await update.effective_message.reply_text(
+                        "⚠️ Si è verificato un errore temporaneo. Riprova tra qualche momento."
+                    )
+                except Exception as notify_error:
+                    logger.debug(f"Impossibile notificare l'utente dell'errore: {notify_error}")
+                    
+        except Exception as handler_error:
+            # Fallback se l'error handler stesso fallisce
+            logger.error(
+                f"Errore nell'error handler: {handler_error}",
+                exc_info=True
+            )
+    
+    app.add_error_handler(error_handler)
+
     # Su Railway usiamo polling + server HTTP per healthcheck sulla PORT
     use_polling_with_health = os.getenv("RAILWAY_ENVIRONMENT") is not None or BOT_MODE != "webhook"
     if use_polling_with_health:
@@ -1379,17 +1429,45 @@ def main():
         # Avvia server health (thread daemon) e poi polling
         _start_health_server(PORT)
         # Avvia il polling (bloccante) con gestione conflitti
-        try:
-            app.run_polling(
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=True
-            )
-        except Exception as e:
-            logger.error(f"Errore polling: {e}")
-            logger.info("Riprovo polling in 5 secondi...")
-            import time
-            time.sleep(5)
-            app.run_polling(drop_pending_updates=True)
+        import time
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                app.run_polling(
+                    allowed_updates=["message", "callback_query"],
+                    drop_pending_updates=True
+                )
+                break  # Successo, esci dal loop
+            except Conflict as conflict_error:
+                retry_count += 1
+                logger.warning(
+                    f"Conflict durante avvio polling (tentativo {retry_count}/{max_retries}): {conflict_error}. "
+                    f"Attendo 10 secondi prima di riprovare..."
+                )
+                if retry_count < max_retries:
+                    time.sleep(10)
+                else:
+                    logger.error(
+                        f"Impossibile avviare polling dopo {max_retries} tentativi a causa di Conflict. "
+                        f"Verifica che non ci siano altre istanze del bot in esecuzione."
+                    )
+                    raise
+            except (NetworkError, RetryAfter) as network_error:
+                retry_count += 1
+                logger.warning(
+                    f"Errore di rete durante avvio polling (tentativo {retry_count}/{max_retries}): {network_error}. "
+                    f"Attendo 5 secondi prima di riprovare..."
+                )
+                if retry_count < max_retries:
+                    time.sleep(5)
+                else:
+                    logger.error(f"Impossibile avviare polling dopo {max_retries} tentativi a causa di errori di rete.")
+                    raise
+            except Exception as e:
+                logger.error(f"Errore inatteso durante polling: {e}", exc_info=True)
+                raise
         return
 
     # Modalità webhook classica (senza health server, non compatibile su PTB 21.5)
