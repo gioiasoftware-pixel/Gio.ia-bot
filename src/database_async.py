@@ -119,6 +119,56 @@ class AsyncDatabaseManager:
             result = await session.execute(select(User))
             return list(result.scalars().all())
     
+    async def check_user_has_dynamic_tables(self, telegram_id: int) -> tuple[bool, Optional[str]]:
+        """
+        Verifica se l'utente ha già tabelle dinamiche nel database.
+        
+        Cerca tutte le tabelle che corrispondono al pattern '{telegram_id}/* INVENTARIO'.
+        Se ne trova almeno una, significa che l'onboarding è già stato completato.
+        
+        Returns:
+            Tuple[bool, Optional[str]]: (has_tables, business_name_found)
+                - has_tables: True se esistono tabelle dinamiche
+                - business_name_found: Il business_name trovato nelle tabelle (se esiste)
+        """
+        async with await get_async_session() as session:
+            try:
+                # Cerca tutte le tabelle che iniziano con '{telegram_id}/' e terminano con ' INVENTARIO'
+                # PostgreSQL gestisce i nomi di tabella quotati in modo speciale
+                check_tables_query = sql_text("""
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public'
+                    AND table_name LIKE :pattern
+                    LIMIT 1
+                """)
+                
+                # Pattern: "{telegram_id}/% INVENTARIO" (escape % per LIKE)
+                pattern = f'"{telegram_id}/% INVENTARIO"'
+                result = await session.execute(check_tables_query, {"pattern": pattern})
+                table_name = result.scalar_one_or_none()
+                
+                if table_name:
+                    # Estrai business_name dal nome tabella
+                    # Formato: "{telegram_id}/{business_name} INVENTARIO"
+                    # Rimuovi prefisso e suffisso
+                    table_name_clean = table_name.strip('"')
+                    if f"{telegram_id}/" in table_name_clean and " INVENTARIO" in table_name_clean:
+                        business_name = table_name_clean.replace(f'"{telegram_id}/', '').replace(' INVENTARIO"', '')
+                        business_name = business_name.strip('"')
+                        # Gestisci anche il caso senza quote
+                        if business_name.startswith('"') and business_name.endswith('"'):
+                            business_name = business_name[1:-1]
+                        logger.info(f"Trovate tabelle dinamiche per {telegram_id}, business_name estratto: {business_name}")
+                        return True, business_name
+                
+                logger.info(f"Nessuna tabella dinamica trovata per {telegram_id}")
+                return False, None
+                
+            except Exception as e:
+                logger.error(f"Errore verificando tabelle dinamiche per {telegram_id}: {e}", exc_info=True)
+                return False, None
+    
     async def create_user(self, telegram_id: int, username: str = None, 
                          first_name: str = None, last_name: str = None) -> User:
         """Crea nuovo utente"""

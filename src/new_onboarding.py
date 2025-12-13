@@ -49,10 +49,54 @@ class NewOnboardingManager:
                 last_name=user.last_name
             )
         
-        # ✅ VERIFICA: Se l'utente ha già un inventario, completa l'onboarding automaticamente
+        # ✅ VERIFICA 1: Controlla se l'utente ha già tabelle dinamiche nel database
+        has_tables, business_name_from_table = await async_db_manager.check_user_has_dynamic_tables(telegram_id)
+        if has_tables and business_name_from_table:
+            logger.info(f"Utente {telegram_id} ha già tabelle dinamiche con business_name: {business_name_from_table}")
+            
+            # Se il business_name nel database è diverso da quello trovato nelle tabelle, correggilo
+            if existing_user and existing_user.business_name != business_name_from_table:
+                logger.warning(
+                    f"Business name mismatch per {telegram_id}: "
+                    f"DB='{existing_user.business_name}', Tabelle='{business_name_from_table}'. "
+                    f"Aggiorno DB con business_name dalle tabelle."
+                )
+                await async_db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    business_name=business_name_from_table,
+                    onboarding_completed=True
+                )
+            elif existing_user and not existing_user.onboarding_completed:
+                # Tabella esiste ma onboarding non marcato come completato
+                await async_db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    onboarding_completed=True
+                )
+            
+            # Verifica quanti vini ha l'utente
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            wine_count = len(user_wines) if user_wines else 0
+            
+            logger.info(f"Onboarding già completato per {telegram_id} (tabelle esistenti, {wine_count} vini)")
+            
+            # Messaggio informativo all'utente
+            await update.message.reply_text(
+                f"✅ **Hai già completato l'onboarding!**\n\n"
+                f"🏢 **{business_name_from_table}**\n\n"
+                f"📦 **Inventario:** {wine_count} vini\n\n"
+                f"💬 **Puoi ora:**\n"
+                f"• Cercare vini nel tuo inventario\n"
+                f"• Registrare movimenti (consumi/rifornimenti)\n"
+                f"• Vedere statistiche e report\n\n"
+                f"📋 Usa /help per tutti i comandi!",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # ✅ VERIFICA 2: Se non ha tabelle, controlla se ha vini nella vecchia tabella wines (fallback)
         user_wines = await async_db_manager.get_user_wines(telegram_id)
         if user_wines and len(user_wines) > 0:
-            logger.info(f"Utente {telegram_id} ha già {len(user_wines)} vini nel database, completa onboarding automaticamente")
+            logger.info(f"Utente {telegram_id} ha già {len(user_wines)} vini nel database (vecchia tabella wines), completa onboarding automaticamente")
             # Completa onboarding se non già completato
             if existing_user and not existing_user.onboarding_completed:
                 await async_db_manager.update_user_onboarding(
@@ -76,7 +120,7 @@ class NewOnboardingManager:
             )
             return
         
-        # Avvia onboarding guidato dall'AI solo se non ha inventario
+        # Avvia onboarding guidato dall'AI solo se non ha né tabelle né vini
         await self._start_ai_guided_onboarding(update, context)
     
     async def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
