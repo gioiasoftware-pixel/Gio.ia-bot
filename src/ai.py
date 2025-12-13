@@ -135,10 +135,27 @@ def _is_add_wine_request(prompt: str) -> bool:
     return any(re.search(pt, p) for pt in patterns)
 
 
-def _is_movement_summary_request(prompt: str) -> bool:
-    """Riconosce richieste tipo: ultimi consumi/movimenti/ricavi"""
+def _is_movement_summary_request(prompt: str) -> tuple[bool, Optional[str]]:
+    """
+    Riconosce richieste tipo: ultimi consumi/movimenti/ricavi.
+    Ritorna (is_request, period) dove period può essere 'day', 'week', 'month', o 'yesterday'.
+    """
     p = prompt.lower().strip()
-    patterns = [
+    
+    # Controlla prima per richieste specifiche con date
+    if any(re.search(pt, p) for pt in [
+        r"\b(consumato|consumi|consumate)\s+(ieri|il\s+giorno\s+prima)\b",
+        r"\bvini\s+(consumato|consumi|consumate)\s+ieri\b",
+        r"\b(che\s+)?vini\s+ho\s+consumato\s+ieri\b",
+        r"\b(che\s+)?vini\s+hai\s+consumato\s+ieri\b",
+        r"\bmovimenti\s+(di|del)\s+ieri\b",
+        r"\bconsumi\s+(di|del)\s+ieri\b",
+        r"\b(ieri|il\s+giorno\s+prima)\s+(ho|hai)\s+consumato\b",
+    ]):
+        return (True, 'yesterday')
+    
+    # Pattern generici (senza data specifica)
+    if any(re.search(pt, p) for pt in [
         r"\bultimi\s+consumi\b",
         r"\bultimi\s+movimenti\b",
         r"\bconsumi\s+recenti\b",
@@ -148,8 +165,10 @@ def _is_movement_summary_request(prompt: str) -> bool:
         r"\bultimi\s+miei\s+consumi\b",
         r"\bmostra\s+(ultimi|recenti)\s+(consumi|movimenti)\b",
         r"\briepilogo\s+(consumi|movimenti)\b",
-    ]
-    return any(re.search(pt, p) for pt in patterns)
+    ]):
+        return (True, None)  # Period non specificato, chiedi all'utente
+    
+    return (False, None)
 
 
 def _is_informational_query(prompt: str) -> tuple[Optional[str], Optional[str]]:
@@ -1253,9 +1272,21 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
         if _is_inventory_list_request(prompt):
             return await _build_inventory_list_response(telegram_id, limit=50)
 
-        # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker)
-        if _is_movement_summary_request(prompt):
-            return "[[ASK_MOVES_PERIOD]]"
+        # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker) o recupera direttamente se specificato
+        is_movement_request, period = _is_movement_summary_request(prompt)
+        if is_movement_request:
+            if period == 'yesterday':
+                # Richiesta specifica per ieri - recupera direttamente i movimenti
+                try:
+                    from .database_async import get_movement_summary_yesterday
+                    summary = await get_movement_summary_yesterday(telegram_id)
+                    return format_movement_period_summary('yesterday', summary)
+                except Exception as e:
+                    logger.error(f"Errore recupero movimenti ieri: {e}", exc_info=True)
+                    return "⚠️ Errore nel recupero dei movimenti di ieri. Riprova."
+            else:
+                # Periodo non specificato, chiedi all'utente
+                return "[[ASK_MOVES_PERIOD]]"
 
         movement_marker = await _check_and_process_movement(prompt, telegram_id)
         if movement_marker and movement_marker.startswith("__MOVEMENT__:"):

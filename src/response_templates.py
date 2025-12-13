@@ -282,7 +282,8 @@ def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
     period_label = {
         'day': 'Ultimo giorno',
         'week': 'Ultimi 7 giorni',
-        'month': 'Ultimi 30 giorni'
+        'month': 'Ultimi 30 giorni',
+        'yesterday': 'Ieri'
     }.get(period, period)
 
     lines = [
