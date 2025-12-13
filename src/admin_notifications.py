@@ -4,6 +4,7 @@ Modulo per notifiche admin (opzionale - fallback se non disponibile)
 import logging
 import httpx
 import os
+import traceback
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -66,4 +67,64 @@ async def enqueue_admin_notification(
         # Fallback silenzioso - non bloccare il flusso principale
         logger.debug(f"[ADMIN_NOTIF] Impossibile inviare notifica admin: {e}")
         return False
+
+
+async def log_error_and_notify_admin(
+    message: str,
+    telegram_id: Optional[int] = None,
+    correlation_id: Optional[str] = None,
+    component: str = "telegram-ai-bot",
+    error_type: str = "error",
+    exc_info: bool = False,
+    **extra_context
+) -> None:
+    """
+    Logga errore e invia automaticamente notifica admin.
+    
+    Args:
+        message: Messaggio errore
+        telegram_id: ID Telegram utente (opzionale)
+        correlation_id: ID correlazione (opzionale, usa get_correlation_id se None)
+        component: Componente che ha generato l'errore (default: "telegram-ai-bot")
+        error_type: Tipo errore per categorizzazione (default: "error")
+        exc_info: Se True, include traceback nel log
+        **extra_context: Contesto aggiuntivo per la notifica
+    """
+    # Logga sempre l'errore
+    if exc_info:
+        logger.error(message, exc_info=True)
+    else:
+        logger.error(message)
+    
+    # Invia notifica admin (async, non blocca)
+    try:
+        error_details = {
+            "error_message": str(message),
+            "component": component,
+            "error_type": error_type,
+            **extra_context
+        }
+        
+        # Se exc_info, aggiungi traceback
+        if exc_info:
+            error_details["traceback"] = traceback.format_exc()
+        
+        # Recupera correlation_id se non fornito
+        if correlation_id is None:
+            try:
+                from .structured_logging import get_correlation_id
+                correlation_id = get_correlation_id()
+            except ImportError:
+                pass
+        
+        # Chiama enqueue_admin_notification
+        await enqueue_admin_notification(
+            event_type="error",
+            telegram_id=telegram_id or 0,
+            payload=error_details,
+            correlation_id=correlation_id
+        )
+    except Exception as notif_error:
+        # Se fallisce la notifica, logga ma non bloccare
+        logger.warning(f"[ADMIN_NOTIF] Errore invio notifica admin per errore: {notif_error}", exc_info=True)
 

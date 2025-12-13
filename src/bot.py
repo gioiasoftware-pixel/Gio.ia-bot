@@ -661,14 +661,34 @@ async def chat_handler(update, context):
                 
                 if main_buttons:
                     keyboard = InlineKeyboardMarkup(main_buttons)
-                    await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
+                    try:
+                        await update.message.reply_text(reply_clean, parse_mode='Markdown', reply_markup=keyboard)
+                    except Exception as parse_error:
+                        logger.error(f"Errore parsing Markdown con bottoni: {parse_error}")
+                        # Fallback: invia senza Markdown
+                        await update.message.reply_text(reply_clean.replace('**', '').replace('__', ''), reply_markup=keyboard)
                 else:
-                    await update.message.reply_text(reply_clean, parse_mode='Markdown')
+                    try:
+                        await update.message.reply_text(reply_clean, parse_mode='Markdown')
+                    except Exception as parse_error:
+                        logger.error(f"Errore parsing Markdown: {parse_error}")
+                        # Fallback: invia senza Markdown
+                        await update.message.reply_text(reply_clean.replace('**', '').replace('__', ''))
             except Exception as e:
-                logger.error(f"Errore parsing marker bottoni: {e}")
-                await update.message.reply_text(reply, parse_mode='Markdown')
+                logger.error(f"Errore parsing marker bottoni: {e}", exc_info=True)
+                try:
+                    await update.message.reply_text(reply, parse_mode='Markdown')
+                except Exception as parse_error:
+                    logger.error(f"Errore parsing Markdown (fallback): {parse_error}")
+                    await update.message.reply_text(reply.replace('**', '').replace('__', ''))
         else:
-            await update.message.reply_text(reply, parse_mode='Markdown')
+            try:
+                await update.message.reply_text(reply, parse_mode='Markdown')
+            except Exception as parse_error:
+                logger.error(f"Errore parsing Markdown (risposta normale): {parse_error}", exc_info=True)
+                # Fallback: invia senza Markdown rimuovendo caratteri speciali
+                reply_plain = reply.replace('**', '').replace('__', '').replace('━', '-')
+                await update.message.reply_text(reply_plain)
         # Logga risposta assistant
         try:
             await async_db_manager.log_chat_message(telegram_id, 'assistant', reply)
@@ -677,36 +697,36 @@ async def chat_handler(update, context):
         logger.info(f"Risposta inviata a {username}")
         
     except Exception as e:
-        logger.error(f"Errore in chat_handler: {e}")
+        # Usa funzione helper che logga e notifica admin automaticamente
+        from .admin_notifications import log_error_and_notify_admin
+        from .structured_logging import get_correlation_id
         
-        # Notifica admin per errore
-        try:
-            from .admin_notifications import enqueue_admin_notification
-            from .structured_logging import get_correlation_id
-            
-            user = update.effective_user
-            telegram_id = user.id if user else None
-            
-            if telegram_id:
-                user_db = await async_db_manager.get_user_by_telegram_id(telegram_id) if telegram_id else None
+        user = update.effective_user
+        telegram_id = user.id if user else None
+        username = user.username or user.first_name if user else None
+        
+        # Recupera business_name per contesto
+        business_name = None
+        if telegram_id:
+            try:
+                user_db = await async_db_manager.get_user_by_telegram_id(telegram_id)
                 business_name = user_db.business_name if user_db else None
-                
-                await enqueue_admin_notification(
-                    event_type="error",
-                    telegram_id=telegram_id,
-                    payload={
-                        "business_name": business_name or "N/A",
-                        "error_type": "chat_handler_error",
-                        "error_message": str(e),
-                        "error_code": "CHAT_ERROR",
-                        "component": "telegram-ai-bot",
-                        "last_user_message": update.message.text[:200] if update.message and update.message.text else None,
-                        "user_visible_error": "⚠️ Errore temporaneo. Riprova tra qualche minuto."
-                    },
-                    correlation_id=get_correlation_id(context)
-                )
-        except Exception as notif_error:
-            logger.warning(f"Errore invio notifica admin: {notif_error}")
+            except Exception:
+                pass
+        
+        await log_error_and_notify_admin(
+            message=f"Errore in chat_handler: {e}",
+            telegram_id=telegram_id,
+            correlation_id=correlation_id,
+            component="telegram-ai-bot",
+            error_type="chat_handler_error",
+            exc_info=True,
+            username=username,
+            business_name=business_name or "N/A",
+            user_message=update.message.text[:200] if update.message and update.message.text else None,
+            error_code="CHAT_ERROR",
+            user_visible_error="⚠️ Errore temporaneo. Riprova tra qualche minuto."
+        )
         
         await update.message.reply_text("⚠️ Errore temporaneo. Riprova tra qualche minuto.")
 
