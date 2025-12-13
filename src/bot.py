@@ -527,6 +527,7 @@ async def chat_handler(update, context):
                         # Se ci sono più corrispondenze, mostra bottoni per selezione
                         message = f"🔍 **Ho trovato {len(selected_wines)} vini che corrispondono alla tua ricerca**\n\n"
                         message += "Seleziona quale vuoi vedere:\n\n"
+                        message += "💡 _Se questi non sono i vini che cercavi, prova a essere un po' più specifico (es. aggiungi il produttore o l'annata)_\n\n"
                         
                         # Crea bottoni inline organizzati su più colonne
                         keyboard = []
