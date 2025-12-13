@@ -802,12 +802,21 @@ class AsyncDatabaseManager:
 
             def add_ilike(field, value):
                 if value:
-                    # Normalizza per gestire plurali (es. "spumanti" matcha "spumante")
-                    normalized = normalize_plural(value)
-                    # Usa pattern che matcha sia singolare che plurale
-                    clauses.append(f"({field} ILIKE :{field}_exact OR {field} ILIKE :{field}_normalized)")
-                    params[f"{field}_exact"] = f"%{value}%"
-                    params[f"{field}_normalized"] = f"%{normalized}%"
+                    # Normalizza per gestire plurali (es. "vermentini" matcha "vermentino")
+                    variants = normalize_plural(value)
+                    
+                    # Crea condizioni OR per tutte le varianti
+                    variant_conditions = []
+                    for idx, variant in enumerate(variants):
+                        param_key = f"{field}_var_{idx}" if idx > 0 else f"{field}_exact"
+                        variant_conditions.append(f"{field} ILIKE :{param_key}")
+                        params[param_key] = f"%{variant}%"
+                    
+                    # Se solo una variante (originale), usa sintassi semplice
+                    if len(variant_conditions) == 1:
+                        clauses.append(f"{field} ILIKE :{field}_exact")
+                    else:
+                        clauses.append(f"({' OR '.join(variant_conditions)})")
 
             add_ilike("region", filters.get("region"))
             add_ilike("country", filters.get("country"))

@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import asyncio
-from typing import Optional, Any
+from typing import Optional, Any, Dict, List
 from openai import OpenAI, OpenAIError
 from .config import OPENAI_MODEL
 from .database_async import async_db_manager
@@ -155,14 +155,14 @@ def _is_movement_summary_request(prompt: str) -> tuple[bool, Optional[str]]:
         return (True, 'yesterday')
     
     # Richieste rifornimenti/arrivati/ricevuti ieri (DEVE essere prima di pattern più generici)
-    # Pattern più specifici prima
+    # Pattern più specifici prima - rimuovo \b alla fine per gestire punteggiatura
     if any(re.search(pt, p) for pt in [
         r"\b(che\s+)?vini\s+(mi\s+sono\s+)?(arrivati|ricevuti|riforniti)\s+ieri",
         r"\b(che\s+)?vini\s+ho\s+(ricevuto|rifornito)\s+ieri",
         r"\bvini\s+(mi\s+sono\s+)?arrivati\s+ieri",
         r"\b(ieri|il\s+giorno\s+prima)\s+(sono\s+arrivati|ho\s+ricevuto|ho\s+rifornito)",
-        r"\brifornimenti\s+(di|del)\s+ieri\b",
-        r"\b(arrivati|arrivate|arrivato|ricevuti|ricevute|ricevuto|riforniti|rifornite|rifornito)\s+(ieri|il\s+giorno\s+prima)\b",
+        r"\brifornimenti\s+(di|del)\s+ieri",
+        r"\b(arrivati|arrivate|arrivato|ricevuti|ricevute|ricevuto|riforniti|rifornite|rifornito)\s+(ieri|il\s+giorno\s+prima)",
     ]):
         return (True, 'yesterday_replenished')
     
@@ -343,6 +343,259 @@ async def _handle_qualitative_query_fallback(telegram_id: int, prompt: str) -> O
     except Exception as e:
         logger.error(f"Errore in _handle_qualitative_query_fallback: {e}", exc_info=True)
         return None
+
+
+async def _retry_level_1_normalize_local(query: str) -> list[str]:
+    """
+    Livello 1: Normalizzazione locale (plurali, accenti).
+    Genera varianti normalizzate del termine di ricerca.
+    
+    Returns:
+        Lista di varianti da provare (originale + normalizzate)
+    """
+    variants = [query]
+    query_lower = query.lower().strip()
+    
+    # Normalizzazione plurali (stessa logica di search_wines)
+    if len(query_lower) > 2:
+        if query_lower.endswith('i'):
+            # Plurale maschile: "vermentini" -> "vermentino"
+            base = query_lower[:-1]
+            variants.append(base + 'o')  # vermentino
+            variants.append(base)  # vermentin
+        elif query_lower.endswith('e'):
+            # Plurale femminile: "bianche" -> "bianco"
+            base = query_lower[:-1]
+            variants.append(base + 'a')  # bianca
+            variants.append(base + 'o')  # bianco
+            variants.append(base)  # bianch
+    
+    # Rimuovi accenti/apostrofi (normalizzazione base)
+    # Nota: search_wines gestisce già accenti, ma aggiungiamo varianti senza apostrofi
+    if "'" in query:
+        variants.append(query.replace("'", ""))
+    if "'" in query:  # apostrofo unicode
+        variants.append(query.replace("'", ""))
+    
+    return list(set(variants))  # Rimuovi duplicati mantenendo ordine
+
+
+async def _retry_level_2_fallback_less_specific(
+    telegram_id: int,
+    original_filters: Dict[str, Any],
+    original_query: Optional[str] = None
+) -> Optional[List]:
+    """
+    Livello 2: Fallback a ricerca meno specifica.
+    Rimuove filtri troppo specifici e prova ricerca generica.
+    
+    Returns:
+        Lista di vini trovati o None se fallimento
+    """
+    try:
+        from .database_async import async_db_manager
+        
+        # Estrai termini chiave dai filtri per ricerca generica
+        fallback_queries = []
+        
+        # Se c'è producer, usa come query generica
+        if "producer" in original_filters and original_filters["producer"]:
+            fallback_queries.append(original_filters["producer"])
+        
+        # Se c'è name_contains, usa come query generica
+        if "name_contains" in original_filters and original_filters["name_contains"]:
+            fallback_queries.append(original_filters["name_contains"])
+        
+        # Se c'è una query originale, usala
+        if original_query:
+            fallback_queries.append(original_query)
+        
+        # Prova ogni query fallback con search_wines (ricerca generica)
+        for fallback_query in fallback_queries:
+            if not fallback_query or not fallback_query.strip():
+                continue
+            
+            logger.info(f"[RETRY_L2] Provo ricerca meno specifica con: '{fallback_query}'")
+            wines = await async_db_manager.search_wines(telegram_id, fallback_query.strip(), limit=50)
+            if wines:
+                logger.info(f"[RETRY_L2] ✅ Trovati {len(wines)} vini con ricerca meno specifica")
+                return wines
+        
+        return None
+    except Exception as e:
+        logger.error(f"[RETRY_L2] Errore in fallback meno specifica: {e}", exc_info=True)
+        return None
+
+
+async def _retry_level_3_ai_post_processing(
+    original_query: str,
+    failed_search_term: Optional[str] = None,
+    original_filters: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """
+    Livello 3: AI Post-Processing.
+    Chiama OpenAI per reinterpretare/suggerire query alternativa.
+    
+    Returns:
+        Query alternativa suggerita dall'AI o None
+    """
+    try:
+        from openai import OpenAI
+        from .config import OPENAI_API_KEY, OPENAI_MODEL
+        
+        if not OPENAI_API_KEY:
+            logger.warning("[RETRY_L3] OPENAI_API_KEY non disponibile, salto AI Post-Processing")
+            return None
+        
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        # Costruisci prompt per AI
+        context_parts = []
+        if failed_search_term:
+            context_parts.append(f"L'utente ha cercato: '{failed_search_term}'")
+        elif original_query:
+            context_parts.append(f"L'utente ha cercato: '{original_query}'")
+        
+        if original_filters:
+            filters_str = ", ".join([f"{k}: {v}" for k, v in original_filters.items() if v])
+            if filters_str:
+                context_parts.append(f"Filtri applicati: {filters_str}")
+        
+        context_parts.append("La ricerca nel database non ha trovato risultati.")
+        
+        retry_prompt = f"""
+{chr(10).join(context_parts)}
+
+Suggerisci una query di ricerca alternativa normalizzata. Considera:
+- Normalizzazione plurali (es. "vermentini" → "vermentino")
+- Rimozione filtri troppo specifici
+- Termine chiave principale da cercare
+
+Rispondi SOLO con il termine di ricerca suggerito, senza spiegazioni, senza virgolette, senza punteggiatura finale.
+Esempio di risposta: vermentino
+"""
+        
+        logger.info(f"[RETRY_L3] Chiamo AI per reinterpretare query: {original_query[:50]}")
+        
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "Sei un assistente che aiuta a normalizzare query di ricerca per vini. Rispondi solo con il termine normalizzato."},
+                {"role": "user", "content": retry_prompt}
+            ],
+            max_tokens=50,
+            temperature=0.3  # Bassa temperatura per risposte più deterministiche
+        )
+        
+        if response.choices and response.choices[0].message.content:
+            retry_query = response.choices[0].message.content.strip().strip('"').strip("'").strip()
+            if retry_query and retry_query != original_query and len(retry_query) > 1:
+                logger.info(f"[RETRY_L3] ✅ AI suggerisce query alternativa: '{retry_query}'")
+                return retry_query
+        
+        return None
+    except Exception as e:
+        logger.error(f"[RETRY_L3] Errore in AI Post-Processing: {e}", exc_info=True)
+        return None
+
+
+async def _cascading_retry_search(
+    telegram_id: int,
+    original_query: str,
+    search_func,
+    search_func_args: Dict[str, Any],
+    original_filters: Optional[Dict[str, Any]] = None
+) -> tuple[Optional[List], Optional[str], str]:
+    """
+    Esegue ricerca con cascata di retry a 3 livelli.
+    
+    Args:
+        telegram_id: ID Telegram utente
+        original_query: Query originale dell'utente
+        search_func: Funzione di ricerca da chiamare (es. async_db_manager.search_wines)
+        search_func_args: Argomenti per search_func
+        original_filters: Filtri originali (se ricerca filtrata)
+    
+    Returns:
+        (wines_found, retry_query_used, level_used)
+        wines_found: Lista vini trovati o None
+        retry_query_used: Query usata nel retry (se applicabile)
+        level_used: "original", "level1", "level2", "level3", "failed"
+    """
+    from .database_async import async_db_manager
+    
+    # Tentativo originale
+    try:
+        wines = await search_func(**search_func_args)
+        if wines:
+            logger.info(f"[RETRY] ✅ Ricerca originale ha trovato {len(wines)} vini")
+            return wines, None, "original"
+    except Exception as e:
+        logger.warning(f"[RETRY] Errore ricerca originale: {e}")
+    
+    # Livello 1: Normalizzazione locale
+    variants = await _retry_level_1_normalize_local(original_query)
+    for variant in variants[1:]:  # Skip primo (originale già provato)
+        if variant == original_query:
+            continue
+        try:
+            # Prova con variante normalizzata
+            args_retry = search_func_args.copy()
+            if "search_term" in args_retry:
+                args_retry["search_term"] = variant
+            elif "query" in args_retry:
+                args_retry["query"] = variant
+            else:
+                # Per search_wines_filtered, usa variant come name_contains
+                if "filters" not in args_retry:
+                    args_retry["filters"] = {}
+                args_retry["filters"] = args_retry["filters"].copy()
+                args_retry["filters"]["name_contains"] = variant
+            
+            wines = await search_func(**args_retry)
+            if wines:
+                logger.info(f"[RETRY_L1] ✅ Trovati {len(wines)} vini con variante normalizzata: '{variant}'")
+                return wines, variant, "level1"
+        except Exception as e:
+            logger.debug(f"[RETRY_L1] Variante '{variant}' fallita: {e}")
+            continue
+    
+    # Livello 2: Fallback a ricerca meno specifica (solo se ricerca filtrata)
+    if original_filters:
+        wines = await _retry_level_2_fallback_less_specific(
+            telegram_id, original_filters, original_query
+        )
+        if wines:
+            return wines, None, "level2"
+    
+    # Livello 3: AI Post-Processing
+    retry_query = await _retry_level_3_ai_post_processing(
+        original_query, original_query, original_filters
+    )
+    if retry_query:
+        try:
+            # Prova ricerca con query suggerita da AI
+            args_retry = search_func_args.copy()
+            if "search_term" in args_retry:
+                args_retry["search_term"] = retry_query
+            elif "query" in args_retry:
+                args_retry["query"] = retry_query
+            else:
+                wines = await async_db_manager.search_wines(telegram_id, retry_query, limit=50)
+                if wines:
+                    logger.info(f"[RETRY_L3] ✅ Trovati {len(wines)} vini con query AI: '{retry_query}'")
+                    return wines, retry_query, "level3"
+            # Se search_func è search_wines, chiamalo direttamente
+            if "search_term" in args_retry or "query" in args_retry:
+                wines = await search_func(**args_retry)
+                if wines:
+                    logger.info(f"[RETRY_L3] ✅ Trovati {len(wines)} vini con query AI: '{retry_query}'")
+                    return wines, retry_query, "level3"
+        except Exception as e:
+            logger.warning(f"[RETRY_L3] Errore ricerca con query AI: {e}")
+    
+    logger.info(f"[RETRY] ❌ Tutti i livelli di retry falliti per: '{original_query}'")
+    return None, None, "failed"
 
 
 async def _handle_sensory_query(telegram_id: int, prompt: str) -> Optional[str]:
@@ -1913,16 +2166,27 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                # Cerca con limit più alto per vedere se ci sono più corrispondenze
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=10)
+                
+                # ✅ CASCADING RETRY: Prova ricerca con retry a livelli
+                from .database_async import async_db_manager
+                wines, retry_query_used, level_used = await _cascading_retry_search(
+                    telegram_id=telegram_id,
+                    original_query=query,
+                    search_func=async_db_manager.search_wines,
+                    search_func_args={"telegram_id": telegram_id, "search_term": query, "limit": 10},
+                    original_filters=None
+                )
+                
                 if wines:
+                    logger.info(f"[GET_WINE_INFO] ✅ Trovati {len(wines)} vini (livello: {level_used}, query: {retry_query_used or query})")
                     # Se ci sono più vini, mostra bottoni per selezione
                     if len(wines) > 1:
-                        logger.info(f"[GET_WINE_INFO] Trovati {len(wines)} vini per '{query}', mostro bottoni per selezione")
+                        logger.info(f"[GET_WINE_INFO] Mostro bottoni per selezione")
                         wine_ids = [str(w.id) for w in wines[:10]]  # Max 10 bottoni
                         return f"[[WINE_SELECTION_BUTTONS:{':'.join(wine_ids)}]]"
                     # Se c'è solo un vino, mostra info dettagliata
                     return format_wine_info(wines[0])
+                
                 return format_wine_not_found(query)
 
             if name == "get_wine_price":
@@ -1939,10 +2203,21 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 query = (args.get("wine_query") or "").strip()
                 if not query:
                     return "❌ Richiesta incompleta: specifica il vino."
-                wines = await async_db_manager.search_wines(telegram_id, query, limit=50)
+                
+                # ✅ CASCADING RETRY: Prova ricerca con retry a livelli
+                from .database_async import async_db_manager
+                wines, retry_query_used, level_used = await _cascading_retry_search(
+                    telegram_id=telegram_id,
+                    original_query=query,
+                    search_func=async_db_manager.search_wines,
+                    search_func_args={"telegram_id": telegram_id, "search_term": query, "limit": 50},
+                    original_filters=None
+                )
+                
                 if wines:
-                    logger.info(f"[GET_WINE_QUANTITY] Trovati {len(wines)} vini per '{query}'")
+                    logger.info(f"[GET_WINE_QUANTITY] ✅ Trovati {len(wines)} vini (livello: {level_used}, query: {retry_query_used or query})")
                     return await format_wines_response_by_count(wines, telegram_id)
+                
                 return format_wine_not_found(query)
 
             if name == "search_wines":
@@ -1955,11 +2230,30 @@ Formato filters: {"region": "Toscana", "country": "Italia", "wine_type": "rosso"
                 merged_filters = {**filters, **{k: v for k, v in derived.items() if k not in filters or not filters.get(k)}}
                 
                 logger.info(f"[SEARCH] Filtri applicati: {merged_filters}")
-                wines = await async_db_manager.search_wines_filtered(telegram_id, merged_filters, limit=limit)
+                
+                # ✅ CASCADING RETRY: Prova ricerca filtrata con retry a livelli
+                from .database_async import async_db_manager
+                
+                # Estrai query originale dai filtri per retry
+                original_query = None
+                if "producer" in merged_filters and merged_filters["producer"]:
+                    original_query = merged_filters["producer"]
+                elif "name_contains" in merged_filters and merged_filters["name_contains"]:
+                    original_query = merged_filters["name_contains"]
+                
+                wines, retry_query_used, level_used = await _cascading_retry_search(
+                    telegram_id=telegram_id,
+                    original_query=original_query or prompt,
+                    search_func=async_db_manager.search_wines_filtered,
+                    search_func_args={"telegram_id": telegram_id, "filters": merged_filters, "limit": limit},
+                    original_filters=merged_filters
+                )
                 
                 if wines:
+                    logger.info(f"[SEARCH] ✅ Trovati {len(wines)} vini (livello: {level_used}, query: {retry_query_used or original_query})")
                     # Usa format_wines_response_by_count per gestire automaticamente i casi
                     return await format_wines_response_by_count(wines, telegram_id)
+                
                 return format_search_no_results(merged_filters)
 
             if name == "get_inventory_stats":
