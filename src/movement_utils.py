@@ -136,6 +136,8 @@ async def fuzzy_match_wine_name(
     )
     
     if matching_wines:
+        logger.info(f"[FUZZY_MATCH] Trovati {len(matching_wines)} vini per '{wine_name}' (livello: {level_used}, query: {retry_query_used or wine_name})")
+        
         # Se ci sono filtri prezzo, filtra i risultati
         if price_filters and any(v is not None for v in price_filters.values()):
             filtered_wines = []

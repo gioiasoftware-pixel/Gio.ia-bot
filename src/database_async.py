@@ -126,6 +126,9 @@ class AsyncDatabaseManager:
         Cerca tutte le tabelle che corrispondono al pattern '{telegram_id}/* INVENTARIO'.
         Se ne trova almeno una, significa che l'onboarding è già stato completato.
         
+        Nota: In information_schema.tables, i nomi di tabella sono senza virgolette.
+        Il nome effettivo nel DB può essere quotato, ma qui viene restituito senza.
+        
         Returns:
             Tuple[bool, Optional[str]]: (has_tables, business_name_found)
                 - has_tables: True se esistono tabelle dinamiche
@@ -134,7 +137,8 @@ class AsyncDatabaseManager:
         async with await get_async_session() as session:
             try:
                 # Cerca tutte le tabelle che iniziano con '{telegram_id}/' e terminano con ' INVENTARIO'
-                # PostgreSQL gestisce i nomi di tabella quotati in modo speciale
+                # In information_schema.tables, i nomi sono senza virgolette
+                # Pattern: "{telegram_id}/% INVENTARIO" -> cercare esattamente così (con virgolette nel nome)
                 check_tables_query = sql_text("""
                     SELECT table_name 
                     FROM information_schema.tables 
@@ -143,24 +147,26 @@ class AsyncDatabaseManager:
                     LIMIT 1
                 """)
                 
-                # Pattern: "{telegram_id}/% INVENTARIO" (escape % per LIKE)
+                # Pattern: cerca "{telegram_id}/% INVENTARIO" (con virgolette nel nome tabella)
+                # PostgreSQL salva i nomi quotati esattamente come scritti, inclusi gli spazi
                 pattern = f'"{telegram_id}/% INVENTARIO"'
                 result = await session.execute(check_tables_query, {"pattern": pattern})
                 table_name = result.scalar_one_or_none()
                 
                 if table_name:
                     # Estrai business_name dal nome tabella
-                    # Formato: "{telegram_id}/{business_name} INVENTARIO"
-                    # Rimuovi prefisso e suffisso
-                    table_name_clean = table_name.strip('"')
-                    if f"{telegram_id}/" in table_name_clean and " INVENTARIO" in table_name_clean:
-                        business_name = table_name_clean.replace(f'"{telegram_id}/', '').replace(' INVENTARIO"', '')
-                        business_name = business_name.strip('"')
-                        # Gestisci anche il caso senza quote
-                        if business_name.startswith('"') and business_name.endswith('"'):
-                            business_name = business_name[1:-1]
-                        logger.info(f"Trovate tabelle dinamiche per {telegram_id}, business_name estratto: {business_name}")
-                        return True, business_name
+                    # Formato nel DB: "{telegram_id}/{business_name} INVENTARIO"
+                    # table_name qui è già senza virgolette iniziali/finali ma mantiene quelle interne se presenti
+                    if f"{telegram_id}/" in table_name and " INVENTARIO" in table_name:
+                        # Estrai la parte tra "{telegram_id}/" e " INVENTARIO"
+                        start_idx = table_name.find(f"{telegram_id}/") + len(f"{telegram_id}/")
+                        end_idx = table_name.find(" INVENTARIO")
+                        if start_idx < end_idx:
+                            business_name = table_name[start_idx:end_idx]
+                            # Rimuovi eventuali virgolette rimaste
+                            business_name = business_name.strip('"')
+                            logger.info(f"Trovate tabelle dinamiche per {telegram_id}, business_name estratto: {business_name}")
+                            return True, business_name
                 
                 logger.info(f"Nessuna tabella dinamica trovata per {telegram_id}")
                 return False, None
@@ -500,6 +506,9 @@ class AsyncDatabaseManager:
                 
                 # Aggiungi parametri per split producer/name (se presenti)
                 query_params.update(producer_name_split_params)
+                
+                # Aggiungi parametri per varianti plurali (se presenti)
+                query_params.update(variant_params)
                 
                 if search_numeric is not None:
                     query_conditions.append("vintage = :search_numeric")

@@ -364,6 +364,8 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
                     continue
             
             wine_name = match.group(2).strip()
+            # Rimuovi "di" iniziale se presente (es. "di rossese lombardi" -> "rossese lombardi")
+            wine_name = re.sub(r'^di\s+', '', wine_name, flags=re.IGNORECASE).strip()
             # Rimuovi punteggiatura finale comune
             wine_name = re.sub(r'[,.;]+$', '', wine_name).strip()
             if wine_name:
