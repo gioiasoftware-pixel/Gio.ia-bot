@@ -1431,6 +1431,7 @@ def main():
         # Avvia server health (thread daemon) e poi polling
         _start_health_server(PORT)
         # Avvia il polling (bloccante) con gestione conflitti
+        logger.info("🚀 Tentativo avvio polling bot...")
         import time
         max_retries = 3
         retry_count = 0
