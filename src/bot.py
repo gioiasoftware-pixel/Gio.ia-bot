@@ -1382,10 +1382,12 @@ def main():
             # Gestione specifica per Conflict (altra istanza bot attiva)
             if isinstance(error, Conflict):
                 logger.warning(
-                    f"Conflict rilevato: {error}. "
+                    f"⚠️ Conflict rilevato: {error}. "
                     f"Probabilmente un'altra istanza del bot è in esecuzione. "
-                    f"Questo è normale durante i deploy se il vecchio processo non è ancora terminato."
+                    f"Questo è normale durante i deploy se il vecchio processo non è ancora terminato. "
+                    f"Il sistema proverà a riconnettersi automaticamente."
                 )
+                # Non sollevare eccezione, lascia che il sistema gestisca il retry
                 return  # Non loggare come errore critico, è gestibile
             
             # Gestione per RetryAfter (rate limiting)
@@ -1435,22 +1437,28 @@ def main():
         
         while retry_count < max_retries:
             try:
+                if retry_count > 0:
+                    logger.info(f"Tentativo avvio polling (tentativo {retry_count + 1}/{max_retries})...")
                 app.run_polling(
                     allowed_updates=["message", "callback_query"],
                     drop_pending_updates=True
                 )
+                # Se arriviamo qui, il polling è partito con successo
+                if retry_count > 0:
+                    logger.info("✅ Polling avviato con successo dopo conflitto risolto")
                 break  # Successo, esci dal loop
             except Conflict as conflict_error:
                 retry_count += 1
                 logger.warning(
                     f"Conflict durante avvio polling (tentativo {retry_count}/{max_retries}): {conflict_error}. "
-                    f"Attendo 10 secondi prima di riprovare..."
+                    f"Probabilmente vecchia istanza ancora attiva. Attendo 10 secondi prima di riprovare..."
                 )
                 if retry_count < max_retries:
                     time.sleep(10)
+                    logger.info(f"⏳ Attesa completata, riprovo avvio polling...")
                 else:
                     logger.error(
-                        f"Impossibile avviare polling dopo {max_retries} tentativi a causa di Conflict. "
+                        f"❌ Impossibile avviare polling dopo {max_retries} tentativi a causa di Conflict. "
                         f"Verifica che non ci siano altre istanze del bot in esecuzione."
                     )
                     raise
