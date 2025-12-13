@@ -49,7 +49,34 @@ class NewOnboardingManager:
                 last_name=user.last_name
             )
         
-        # Avvia onboarding guidato dall'AI
+        # ✅ VERIFICA: Se l'utente ha già un inventario, completa l'onboarding automaticamente
+        user_wines = await async_db_manager.get_user_wines(telegram_id)
+        if user_wines and len(user_wines) > 0:
+            logger.info(f"Utente {telegram_id} ha già {len(user_wines)} vini nel database, completa onboarding automaticamente")
+            # Completa onboarding se non già completato
+            if existing_user and not existing_user.onboarding_completed:
+                await async_db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    onboarding_completed=True
+                )
+                logger.info(f"Onboarding completato automaticamente per {telegram_id} (ha già {len(user_wines)} vini)")
+            
+            # Messaggio informativo all'utente
+            business_name = existing_user.business_name if existing_user else "il tuo locale"
+            await update.message.reply_text(
+                f"✅ **Hai già completato l'onboarding!**\n\n"
+                f"🏢 **{business_name}**\n\n"
+                f"📦 **Inventario:** {len(user_wines)} vini\n\n"
+                f"💬 **Puoi ora:**\n"
+                f"• Cercare vini nel tuo inventario\n"
+                f"• Registrare movimenti (consumi/rifornimenti)\n"
+                f"• Vedere statistiche e report\n\n"
+                f"📋 Usa /help per tutti i comandi!",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Avvia onboarding guidato dall'AI solo se non ha inventario
         await self._start_ai_guided_onboarding(update, context)
     
     async def _send_onboarding_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE, step: str) -> None:
@@ -208,6 +235,38 @@ class NewOnboardingManager:
             return False
         
         telegram_id = update.effective_user.id
+        
+        # ✅ VERIFICA: Se l'utente ha già un inventario durante l'onboarding, interrompi e completa
+        from .database_async import async_db_manager
+        user_wines = await async_db_manager.get_user_wines(telegram_id)
+        if user_wines and len(user_wines) > 0:
+            logger.info(f"Utente {telegram_id} ha già {len(user_wines)} vini durante onboarding, interrompe onboarding")
+            # Completa onboarding se non già completato
+            user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+            if user and not user.onboarding_completed:
+                await async_db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    onboarding_completed=True
+                )
+                logger.info(f"Onboarding completato automaticamente per {telegram_id} (ha già inventario)")
+            
+            # Reset stato onboarding
+            context.user_data.pop('onboarding_step', None)
+            context.user_data.pop('onboarding_data', None)
+            
+            # Messaggio informativo
+            business_name = user.business_name if user else "il tuo locale"
+            await update.message.reply_text(
+                f"✅ **Hai già completato l'onboarding!**\n\n"
+                f"🏢 **{business_name}**\n\n"
+                f"📦 **Inventario:** {len(user_wines)} vini\n\n"
+                f"💬 **La tua query è stata processata normalmente.**\n"
+                f"Puoi cercare vini, registrare movimenti e vedere statistiche.",
+                parse_mode='Markdown'
+            )
+            # Ritorna False per permettere al bot di processare normalmente la query
+            return False
+        
         user_data = context.user_data.get('onboarding_data', {})
         
         # Gestisci risposta testuale (nome locale) PRIMA

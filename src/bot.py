@@ -344,12 +344,26 @@ async def chat_handler(update, context):
             )
             return
         
+        # ✅ VERIFICA: Se l'utente ha inventario ma onboarding non completato, completa automaticamente
+        from .database_async import async_db_manager
+        user = await async_db_manager.get_user_by_telegram_id(telegram_id)
+        if user and not user.onboarding_completed:
+            user_wines = await async_db_manager.get_user_wines(telegram_id)
+            if user_wines and len(user_wines) > 0:
+                logger.info(f"Utente {telegram_id} ha inventario ({len(user_wines)} vini) ma onboarding non completato, completa automaticamente")
+                await async_db_manager.update_user_onboarding(
+                    telegram_id=telegram_id,
+                    onboarding_completed=True
+                )
+                logger.info(f"Onboarding completato automaticamente per {telegram_id}")
+        
         # Gestisci nuovo onboarding se in corso
         if await new_onboarding_manager.handle_onboarding_response(update, context):
             return
         
         # Gestisci onboarding guidato dall'AI
-        if await new_onboarding_manager.handle_ai_guided_response(update, context):
+        onboarding_handled = await new_onboarding_manager.handle_ai_guided_response(update, context)
+        if onboarding_handled:
             return
         
         # Logga messaggio utente nella chat history
