@@ -1292,6 +1292,7 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
         # Richieste di riepilogo movimenti: chiedi periodo via bottoni (marker) o recupera direttamente se specificato
         is_movement_request, period = _is_movement_summary_request(prompt)
         if is_movement_request:
+            logger.info(f"[MOVEMENT_SUMMARY] Richiesta movimenti riconosciuta: period={period} per prompt: {prompt[:50]}")
             if period == 'yesterday':
                 # Richiesta specifica per ieri - recupera direttamente i movimenti
                 try:
