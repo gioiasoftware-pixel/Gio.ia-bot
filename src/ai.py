@@ -154,14 +154,15 @@ def _is_movement_summary_request(prompt: str) -> tuple[bool, Optional[str]]:
     ]):
         return (True, 'yesterday')
     
-    # Richieste rifornimenti/arrivati/ricevuti ieri
+    # Richieste rifornimenti/arrivati/ricevuti ieri (DEVE essere prima di pattern più generici)
+    # Pattern più specifici prima
     if any(re.search(pt, p) for pt in [
-        r"\b(arrivati|arrivate|arrivato|ricevuti|ricevute|ricevuto|riforniti|rifornite|rifornito)\s+(ieri|il\s+giorno\s+prima)\b",
-        r"\bvini\s+(mi\s+sono\s+)?arrivati\s+ieri\b",
-        r"\b(che\s+)?vini\s+(mi\s+sono\s+)?(arrivati|ricevuti|riforniti)\s+ieri\b",
-        r"\b(che\s+)?vini\s+ho\s+(ricevuto|rifornito)\s+ieri\b",
+        r"\b(che\s+)?vini\s+(mi\s+sono\s+)?(arrivati|ricevuti|riforniti)\s+ieri",
+        r"\b(che\s+)?vini\s+ho\s+(ricevuto|rifornito)\s+ieri",
+        r"\bvini\s+(mi\s+sono\s+)?arrivati\s+ieri",
+        r"\b(ieri|il\s+giorno\s+prima)\s+(sono\s+arrivati|ho\s+ricevuto|ho\s+rifornito)",
         r"\brifornimenti\s+(di|del)\s+ieri\b",
-        r"\b(ieri|il\s+giorno\s+prima)\s+(sono\s+arrivati|ho\s+ricevuto|ho\s+rifornito)\b",
+        r"\b(arrivati|arrivate|arrivato|ricevuti|ricevute|ricevuto|riforniti|rifornite|rifornito)\s+(ieri|il\s+giorno\s+prima)\b",
     ]):
         return (True, 'yesterday_replenished')
     
