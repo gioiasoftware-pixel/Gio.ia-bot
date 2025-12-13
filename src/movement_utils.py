@@ -126,8 +126,14 @@ async def fuzzy_match_wine_name(
                 logger.info(f"[FUZZY_MATCH] Trovati {len(matching_wines)} vini con filtri prezzo per producer '{wine_name}' (livello: {level_used}, query: {retry_query_used or wine_name})")
                 return matching_wines
     
-    # 1. Ricerca normale (senza filtri prezzo o se non ha trovato con filtri)
-    matching_wines = await async_db_manager.search_wines(telegram_id, wine_name, limit=limit)
+    # 1. Ricerca normale (senza filtri prezzo o se non ha trovato con filtri) - usa cascading retry
+    matching_wines, retry_query_used, level_used = await _cascading_retry_search_for_movement(
+        telegram_id=telegram_id,
+        original_query=wine_name,
+        search_func=async_db_manager.search_wines,
+        search_func_args={"telegram_id": telegram_id, "search_term": wine_name, "limit": limit},
+        original_filters=None
+    )
     
     if matching_wines:
         # Se ci sono filtri prezzo, filtra i risultati
