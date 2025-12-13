@@ -283,16 +283,22 @@ def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
         'day': 'Ultimo giorno',
         'week': 'Ultimi 7 giorni',
         'month': 'Ultimi 30 giorni',
-        'yesterday': 'Ieri'
+        'yesterday': 'Ieri',
+        'yesterday_replenished': 'Ieri — Rifornimenti'
     }.get(period, period)
 
     lines = [
         f"📈 **Movimenti — {period_label}**",
         "━" * 30,
-        f"📉 Consumate: {totals.get('total_consumed', 0)} bottiglie",
-        f"📈 Aggiunte: {totals.get('total_replenished', 0)} bottiglie",
-        f"📦 Variazione netta: {totals.get('net_change', 0)} bottiglie",
     ]
+    
+    # Per rifornimenti di ieri, mostra solo rifornimenti
+    if period == 'yesterday_replenished':
+        lines.append(f"📦 **Rifornite:** {totals.get('total_replenished', 0)} bottiglie")
+    else:
+        lines.append(f"📉 Consumate: {totals.get('total_consumed', 0)} bottiglie")
+        lines.append(f"📈 Aggiunte: {totals.get('total_replenished', 0)} bottiglie")
+        lines.append(f"📦 Variazione netta: {totals.get('net_change', 0)} bottiglie")
 
     top_c = totals.get('top_consumed') or []
     if top_c:
