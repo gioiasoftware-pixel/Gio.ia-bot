@@ -46,11 +46,13 @@ def setup_colored_logging(service_name: str = "telegram-bot"):
     # Aggiungi handler colorato
     root_logger.addHandler(handler)
     
-    # Configura logger specifici per ridurre verbosità
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('httpcore').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    logging.getLogger('telegram').setLevel(logging.WARNING)
+    # Configura logger specifici per ridurre verbosità e usare il nostro handler
+    for logger_name in ('httpx', 'httpcore', 'aiohttp', 'telegram', 'telegram.ext', 'telegram.ext.Application'):
+        lib_logger = logging.getLogger(logger_name)
+        lib_logger.handlers = []  # Rimuovi handler esistenti
+        lib_logger.addHandler(handler)  # Usa il nostro handler colorato
+        lib_logger.setLevel(logging.WARNING)  # Riduci verbosità
+        lib_logger.propagate = False  # Non propagare al root per evitare duplicazioni
     
     return root_logger
 

@@ -11,7 +11,10 @@ from .file_upload import file_upload_manager
 from .inventory_movements import inventory_movement_manager
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-logging.basicConfig(level=logging.INFO)
+# Configurazione logging colorato PRIMA di qualsiasi altro import che usa logging
+from .logging_config import setup_colored_logging
+setup_colored_logging("telegram-bot")
+
 logger = logging.getLogger(__name__)
 
 # Filtra i log httpx/httpcore: mostra solo ERROR (fix: lambda con closure corretta)
