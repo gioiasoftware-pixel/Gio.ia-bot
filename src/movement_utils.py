@@ -180,18 +180,24 @@ async def fuzzy_match_wine_name(
         return matching_wines
     
     # 2. Se non trova, prova ricerca per primi caratteri - usa cascading retry
-    if len(wine_name) >= 4:
-        short_search = wine_name[:4].lower()
-        matching_wines, retry_query_used, level_used = await _cascading_retry_search_for_movement(
-            telegram_id=telegram_id,
-            original_query=short_search,
-            search_func=async_db_manager.search_wines,
-            search_func_args={"telegram_id": telegram_id, "search_term": short_search, "limit": limit},
-            original_filters=None
-        )
-        if matching_wines:
-            logger.info(f"[FUZZY_MATCH] Trovato match con primi caratteri '{short_search}' per '{wine_name}' (livello: {level_used}, query: {retry_query_used or short_search})")
-            return matching_wines
+    # Solo se il termine è abbastanza lungo e non inizia con stop words comuni
+    wine_name_clean = wine_name.strip()
+    if len(wine_name_clean) >= 4:
+        # Rimuovi "di" iniziale se presente prima di prendere i primi caratteri
+        wine_name_clean = re.sub(r'^di\s+', '', wine_name_clean, flags=re.IGNORECASE).strip()
+        # Solo se dopo la pulizia è ancora abbastanza lungo e non è troppo generico
+        if len(wine_name_clean) >= 4 and wine_name_clean[:3].lower() not in ['di ', 'del', 'deg', 'dei']:
+            short_search = wine_name_clean[:4].lower()
+            matching_wines, retry_query_used, level_used = await _cascading_retry_search_for_movement(
+                telegram_id=telegram_id,
+                original_query=short_search,
+                search_func=async_db_manager.search_wines,
+                search_func_args={"telegram_id": telegram_id, "search_term": short_search, "limit": limit},
+                original_filters=None
+            )
+            if matching_wines:
+                logger.info(f"[FUZZY_MATCH] Trovato match con primi caratteri '{short_search}' per '{wine_name}' (livello: {level_used}, query: {retry_query_used or short_search})")
+                return matching_wines
     
     # 3. Se ancora non trova, usa rapidfuzz per fuzzy matching su tutti i vini
     # Cerca sia nel nome che nell'uvaggio (grape_variety)
