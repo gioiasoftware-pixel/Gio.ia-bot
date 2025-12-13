@@ -786,23 +786,35 @@ class AsyncDatabaseManager:
             clauses = ["user_id = :user_id"]
             params = {"user_id": user.id, "limit": limit, "offset": offset}
 
-            def normalize_plural(word: str) -> str:
-                """Normalizza plurali italiani comuni per matching più permissivo"""
+            def normalize_plural(word: str) -> list[str]:
+                """Normalizza plurali italiani comuni per matching più permissivo.
+                Ritorna lista di varianti (originale + normalizzate) come search_wines.
+                """
                 if not word:
-                    return word
+                    return [word] if word is not None else []
                 word_lower = word.lower().strip()
-                # Rimuovi suffissi plurali comuni italiani
-                if word_lower.endswith('i'):
-                    # es. "spumanti" -> "spumant", "rossi" -> "ross"
-                    return word_lower[:-1]
-                elif word_lower.endswith('e'):
-                    # es. "bianche" -> "bianch"
-                    return word_lower[:-1]
-                return word_lower
+                variants = [word_lower]
+                
+                # Normalizzazione plurali (stessa logica di search_wines per consistenza)
+                if len(word_lower) > 2:
+                    if word_lower.endswith('i'):
+                        # Plurale maschile: "vermentini" -> "vermentino", "spumanti" -> "spumante"
+                        base = word_lower[:-1]
+                        variants.append(base + 'o')  # vermentino, spumante
+                        variants.append(base)  # vermentin, spumant
+                    elif word_lower.endswith('e'):
+                        # Plurale femminile: "bianche" -> "bianco"
+                        base = word_lower[:-1]
+                        variants.append(base + 'a')  # bianca
+                        variants.append(base + 'o')  # bianco
+                        variants.append(base)  # bianch
+                
+                return list(set(variants))  # Rimuovi duplicati
 
             def add_ilike(field, value):
                 if value:
                     # Normalizza per gestire plurali (es. "vermentini" matcha "vermentino")
+                    # normalize_plural ora ritorna una lista di varianti
                     variants = normalize_plural(value)
                     
                     # Crea condizioni OR per tutte le varianti

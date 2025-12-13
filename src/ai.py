@@ -374,7 +374,7 @@ async def _retry_level_1_normalize_local(query: str) -> list[str]:
     # Nota: search_wines gestisce già accenti, ma aggiungiamo varianti senza apostrofi
     if "'" in query:
         variants.append(query.replace("'", ""))
-    if "'" in query:  # apostrofo unicode
+    if "'" in query:  # apostrofo unicode (diverso carattere)
         variants.append(query.replace("'", ""))
     
     return list(set(variants))  # Rimuovi duplicati mantenendo ordine
@@ -562,17 +562,23 @@ async def _cascading_retry_search(
     
     # Livello 2: Fallback a ricerca meno specifica (solo se ricerca filtrata)
     if original_filters:
+        logger.info(f"[RETRY_L2] Avvio fallback ricerca meno specifica per query filtrata: '{original_query}'")
         wines = await _retry_level_2_fallback_less_specific(
             telegram_id, original_filters, original_query
         )
         if wines:
+            logger.info(f"[RETRY_L2] ✅ Fallback riuscito: trovati {len(wines)} vini")
             return wines, None, "level2"
+        else:
+            logger.info(f"[RETRY_L2] ❌ Fallback non ha trovato risultati")
     
     # Livello 3: AI Post-Processing
+    logger.info(f"[RETRY_L3] Avvio AI Post-Processing per: '{original_query}'")
     retry_query = await _retry_level_3_ai_post_processing(
         original_query, original_query, original_filters
     )
     if retry_query:
+        logger.info(f"[RETRY_L3] Query suggerita da AI: '{retry_query}'")
         try:
             # Per ricerca filtrata, usa sempre search_wines generico con query AI
             # Per ricerca semplice, prova con search_func modificato
@@ -597,7 +603,7 @@ async def _cascading_retry_search(
         except Exception as e:
             logger.warning(f"[RETRY_L3] Errore ricerca con query AI: {e}", exc_info=True)
     
-    logger.info(f"[RETRY] ❌ Tutti i livelli di retry falliti per: '{original_query}'")
+    logger.warning(f"[RETRY] ❌ TUTTI I LIVELLI DI RETRY FALLITI per query: '{original_query}' (livelli provati: originale → L1 → L2 → L3)")
     return None, None, "failed"
 
 
