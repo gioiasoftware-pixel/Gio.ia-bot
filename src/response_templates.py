@@ -304,13 +304,17 @@ def format_movement_period_summary(period: str, totals: Dict[str, Any]) -> str:
     if top_c:
         lines.append("\n🔥 Più consumati:")
         for name, qty in top_c[:5]:
-            lines.append(f"• {name} (−{qty})")
+            # Escape caratteri speciali Markdown nel nome vino
+            name_escaped = name.replace('*', '\\*').replace('_', '\\_').replace('[', '\\[').replace(']', '\\]')
+            lines.append(f"• {name_escaped} (−{qty})")
 
     top_r = totals.get('top_replenished') or []
     if top_r:
         lines.append("\n🛒 Più riforniti:")
-        for name, qty in top_r[:5]:
-            lines.append(f"• {name} (+{qty})")
+        for name, qty in top_r[:10]:  # Aumentato a 10 per rifornimenti di ieri
+            # Escape caratteri speciali Markdown nel nome vino
+            name_escaped = name.replace('*', '\\*').replace('_', '\\_').replace('[', '\\[').replace(']', '\\]')
+            lines.append(f"• {name_escaped} (+{qty})")
 
     lines.append("━" * 30)
     return "\n".join(lines)

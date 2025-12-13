@@ -1119,8 +1119,11 @@ async def _check_movement_with_ai(prompt: str, telegram_id: int) -> str:
 MESSAGGIO: "{prompt}"
 
 Un movimento può essere espresso in molti modi:
-- Rifornimento: "mi sono arrivati X vini", "arrivati X", "sono arrivati X", "ho ricevuto X", "comprato X", ecc.
+- Rifornimento: "mi sono arrivati X vini", "arrivati X", "sono arrivati X", "ho ricevuto X", "comprato X", "ho acquistato X", ecc.
 - Consumo: "ho venduto X", "ho consumato X", "ho bevuto X", "venduto X", ecc.
+
+IMPORTANTE: Se il messaggio contiene movimenti multipli (es. "ho acquistato 1 vino A e 1 vino B"), estrai solo il PRIMO movimento. 
+I movimenti multipli vengono gestiti automaticamente dal sistema di parsing.
 
 Rispondi SOLO con un JSON valido in questo formato (senza testo aggiuntivo):
 {{
@@ -1133,6 +1136,7 @@ Rispondi SOLO con un JSON valido in questo formato (senza testo aggiuntivo):
 Esempi:
 - "mi sono arrivati 6 gavi" → {{"is_movement": true, "type": "rifornimento", "quantity": 6, "wine_name": "gavi"}}
 - "ho consumato 5 sassicaia" → {{"is_movement": true, "type": "consumo", "quantity": 5, "wine_name": "sassicaia"}}
+- "ho acquistato 1 hexenbicler e 1 unterebner" → {{"is_movement": true, "type": "rifornimento", "quantity": 1, "wine_name": "hexenbicler"}}
 - "quanti vini ho?" → {{"is_movement": false, "type": null, "quantity": null, "wine_name": null}}
 """
         

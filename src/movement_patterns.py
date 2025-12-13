@@ -316,8 +316,8 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
         # Supporta anche "aggiungere:" come prefisso
         prefix_patterns = [
             r'aggiungere\s*:',
-            r'ho ricevuto|ho comprato|ho aggiunto',
-            r'ricevuto|comprato|aggiunto'
+            r'ho ricevuto|ho comprato|ho aggiunto|ho acquistato',
+            r'ricevuto|comprato|aggiunto|acquistato'
         ]
     
     # Cerca il prefisso

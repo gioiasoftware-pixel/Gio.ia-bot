@@ -3,6 +3,7 @@ Utility condivise per gestione movimenti inventario.
 Include fuzzy matching e gestione errori centralizzata.
 """
 import logging
+import re
 from typing import List, Optional, Any, Tuple, Dict
 from .database_async import async_db_manager
 
