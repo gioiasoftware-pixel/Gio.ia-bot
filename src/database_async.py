@@ -337,14 +337,20 @@ class AsyncDatabaseManager:
                 ]
                 
                 # Aggiungi condizioni per varianti plurali (es. "vermentini" -> "vermentino")
+                # Prepara anche i parametri da aggiungere a query_params
+                variant_params = {}
                 for idx, variant in enumerate(search_variants[1:], start=1):  # Skip primo (originale)
                     variant_pattern = f"%{variant}%"
+                    variant_unaccent = strip_accents(variant)
+                    variant_pattern_unaccent = f"%{variant_unaccent}%"
                     query_conditions.extend([
                         f"name ILIKE :search_variant_{idx}",
                         f"grape_variety ILIKE :search_variant_{idx}",
                         f"translate(lower(name), :accent_from, :accent_to) ILIKE :search_variant_unaccent_{idx}",
                         f"translate(lower(grape_variety), :accent_from, :accent_to) ILIKE :search_variant_unaccent_{idx}"
                     ])
+                    variant_params[f"search_variant_{idx}"] = variant_pattern
+                    variant_params[f"search_variant_unaccent_{idx}"] = variant_pattern_unaccent
                 
                 # Se ci sono parole significative, aggiungi condizioni più specifiche
                 producer_name_split_params = {}  # Parametri per split producer/name (se necessario)
@@ -418,10 +424,11 @@ class AsyncDatabaseManager:
                             # Per singola parola, aggiungi anche varianti plurali
                             word_variants = normalize_plural_for_search(word)
                             query_conditions.append(f"(name ILIKE :word_0 OR producer ILIKE :word_0 OR grape_variety ILIKE :word_0)")
-                            # Aggiungi condizioni per varianti
+                            # Aggiungi condizioni per varianti (prepara parametri che verranno aggiunti dopo)
                             for j, variant in enumerate(word_variants[1:], start=1):
                                 param_key = f"word_0_var_{j}"
                                 query_conditions.append(f"(name ILIKE :{param_key} OR producer ILIKE :{param_key} OR grape_variety ILIKE :{param_key})")
+                            # I parametri verranno aggiunti più avanti insieme alle altre varianti
                 
                 query_params = {
                     "user_id": user.id,
@@ -432,9 +439,14 @@ class AsyncDatabaseManager:
                     "limit": limit * 2  # Recupera più risultati per filtraggio post-query
                 }
                 
-                # Aggiungi parametri per le parole significative
+                # Aggiungi parametri per le parole significative e le loro varianti plurali
                 for i, word in enumerate(search_words):
                     query_params[f"word_{i}"] = f"%{word}%"
+                    # Aggiungi anche parametri per varianti plurali di ogni parola
+                    word_variants = normalize_plural_for_search(word)
+                    for j, variant in enumerate(word_variants[1:], start=1):
+                        param_key = f"word_{i}_var_{j}"
+                        query_params[param_key] = f"%{variant}%"
                 
                 # Aggiungi parametri per split producer/name (se presenti)
                 query_params.update(producer_name_split_params)
