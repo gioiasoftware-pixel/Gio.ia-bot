@@ -143,14 +143,31 @@ def _is_movement_summary_request(prompt: str) -> tuple[bool, Optional[str]]:
     p = prompt.lower().strip()
     
     # Controlla prima per richieste specifiche con date
+    # Richieste consumo ieri
     if any(re.search(pt, p) for pt in [
         r"\b(consumato|consumi|consumate)\s+(ieri|il\s+giorno\s+prima)\b",
         r"\bvini\s+(consumato|consumi|consumate)\s+ieri\b",
         r"\b(che\s+)?vini\s+ho\s+consumato\s+ieri\b",
         r"\b(che\s+)?vini\s+hai\s+consumato\s+ieri\b",
-        r"\bmovimenti\s+(di|del)\s+ieri\b",
         r"\bconsumi\s+(di|del)\s+ieri\b",
         r"\b(ieri|il\s+giorno\s+prima)\s+(ho|hai)\s+consumato\b",
+    ]):
+        return (True, 'yesterday')
+    
+    # Richieste rifornimenti/arrivati/ricevuti ieri
+    if any(re.search(pt, p) for pt in [
+        r"\b(arrivati|arrivate|arrivato|ricevuti|ricevute|ricevuto|riforniti|rifornite|rifornito)\s+(ieri|il\s+giorno\s+prima)\b",
+        r"\bvini\s+(mi\s+sono\s+)?arrivati\s+ieri\b",
+        r"\b(che\s+)?vini\s+(mi\s+sono\s+)?(arrivati|ricevuti|riforniti)\s+ieri\b",
+        r"\b(che\s+)?vini\s+ho\s+(ricevuto|rifornito)\s+ieri\b",
+        r"\brifornimenti\s+(di|del)\s+ieri\b",
+        r"\b(ieri|il\s+giorno\s+prima)\s+(sono\s+arrivati|ho\s+ricevuto|ho\s+rifornito)\b",
+    ]):
+        return (True, 'yesterday_replenished')
+    
+    # Richieste movimenti generici di ieri
+    if any(re.search(pt, p) for pt in [
+        r"\bmovimenti\s+(di|del)\s+ieri\b",
     ]):
         return (True, 'yesterday')
     
@@ -1284,6 +1301,15 @@ async def get_ai_response(prompt: str, telegram_id: int = None, correlation_id: 
                 except Exception as e:
                     logger.error(f"Errore recupero movimenti ieri: {e}", exc_info=True)
                     return "⚠️ Errore nel recupero dei movimenti di ieri. Riprova."
+            elif period == 'yesterday_replenished':
+                # Richiesta specifica per rifornimenti di ieri - mostra solo rifornimenti
+                try:
+                    from .database_async import get_movement_summary_yesterday_replenished
+                    summary = await get_movement_summary_yesterday_replenished(telegram_id)
+                    return format_movement_period_summary('yesterday_replenished', summary)
+                except Exception as e:
+                    logger.error(f"Errore recupero rifornimenti ieri: {e}", exc_info=True)
+                    return "⚠️ Errore nel recupero dei rifornimenti di ieri. Riprova."
             else:
                 # Periodo non specificato, chiedi all'utente
                 return "[[ASK_MOVES_PERIOD]]"

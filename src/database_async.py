@@ -1029,6 +1029,78 @@ async def get_movement_summary_yesterday(telegram_id: int) -> Dict[str, Any]:
             return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
 
 
+async def get_movement_summary_yesterday_replenished(telegram_id: int) -> Dict[str, Any]:
+    """
+    Riepiloga SOLO rifornimenti di ieri (giorno precedente).
+    Ritorna dizionario con totali e top prodotti riforniti.
+    """
+    from datetime import datetime, timedelta
+    async with await get_async_session() as session:
+        # Carica utente
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.business_name:
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+        
+        table_name = f'"{telegram_id}/{user.business_name} Consumi e rifornimenti"'
+        
+        # Calcola ieri: inizio e fine del giorno precedente
+        now = datetime.utcnow()
+        yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_end = yesterday_start + timedelta(days=1)
+        
+        try:
+            # Solo rifornimenti (total_consumed = 0)
+            totals_q = sql_text(f"""
+                SELECT 
+                  0 AS total_consumed,
+                  COALESCE(SUM(CASE WHEN movement_type = 'rifornimento' THEN quantity_change ELSE 0 END), 0) AS total_replenished
+                FROM {table_name}
+                WHERE user_id = :user_id 
+                AND movement_date >= :yesterday_start 
+                AND movement_date < :yesterday_end
+                AND movement_type = 'rifornimento'
+            """)
+            res = await session.execute(totals_q, {
+                "user_id": user.id, 
+                "yesterday_start": yesterday_start, 
+                "yesterday_end": yesterday_end
+            })
+            row = res.fetchone()
+            total_replenished = int(row.total_replenished) if row and hasattr(row, 'total_replenished') else 0
+
+            # Top riforniti
+            top_r_q = sql_text(f"""
+                SELECT wine_name AS name, COALESCE(SUM(quantity_change), 0) AS qty
+                FROM {table_name}
+                WHERE user_id = :user_id 
+                AND movement_date >= :yesterday_start 
+                AND movement_date < :yesterday_end
+                AND movement_type = 'rifornimento'
+                GROUP BY wine_name
+                HAVING COALESCE(SUM(quantity_change), 0) > 0
+                ORDER BY qty DESC
+                LIMIT 10
+            """)
+            res_r = await session.execute(top_r_q, {
+                "user_id": user.id, 
+                "yesterday_start": yesterday_start, 
+                "yesterday_end": yesterday_end
+            })
+            top_replenished = [(r.name, int(r.qty)) for r in res_r.fetchall()]
+
+            return {
+                "total_consumed": 0,
+                "total_replenished": total_replenished,
+                "net_change": int(total_replenished),
+                "top_consumed": [],  # Nessun consumo
+                "top_replenished": top_replenished,
+            }
+        except Exception as e:
+            logger.error(f"Errore riepilogo rifornimenti ieri da tabella {table_name}: {e}", exc_info=True)
+            return {"total_consumed": 0, "total_replenished": 0, "net_change": 0}
+
+
 async def get_movement_summary(telegram_id: int, period: str = 'day') -> Dict[str, Any]:
     """
     Riepiloga movimenti (consumi/rifornimenti) per periodo: day/week/month.
