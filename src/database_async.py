@@ -923,7 +923,8 @@ class AsyncDatabaseManager:
                 return []
 
 
-# ⚠️ CODICE ORFANO RIMOSSO (corpo funzione senza definizione - già presente sopra alla linea 941)
+# Istanza globale
+async_db_manager = AsyncDatabaseManager()
 
 
 # Utility per cutoff periodo
