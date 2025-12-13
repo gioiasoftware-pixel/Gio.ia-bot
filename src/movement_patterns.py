@@ -294,6 +294,7 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
     """
     Analizza un messaggio per trovare movimenti multipli.
     Esempio: "ho consumato 1 etna e 1 fiano" -> [(1, "etna"), (1, "fiano")]
+    Supporta anche formati con newline e vari prefissi.
     
     Args:
         message_text: Testo del messaggio
@@ -305,16 +306,18 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
     movements = []
     message_lower = message_text.lower().strip()
     
-    # Pattern per riconoscere il prefisso del movimento
+    # Pattern per riconoscere il prefisso del movimento (estesi)
     if movement_type == 'consumo':
         prefix_patterns = [
-            r'ho venduto|ho consumato|ho bevuto|venduto|consumato|bevuto',
-            r'ho venduto|ho consumato|ho bevuto'
+            r'ho venduto|ho consumato|ho bevuto',
+            r'venduto|consumato|bevuto'
         ]
     else:
+        # Supporta anche "aggiungere:" come prefisso
         prefix_patterns = [
-            r'ho ricevuto|ho comprato|ho aggiunto|ricevuto|comprato|aggiunto',
-            r'ho ricevuto|ho comprato|ho aggiunto'
+            r'aggiungere\s*:',
+            r'ho ricevuto|ho comprato|ho aggiunto',
+            r'ricevuto|comprato|aggiunto'
         ]
     
     # Cerca il prefisso
@@ -324,23 +327,31 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
         if prefix_match:
             break
     
-    if not prefix_match:
-        return movements
+    # Se c'è un prefisso, estrai parte dopo
+    if prefix_match:
+        prefix_end = prefix_match.end()
+        rest_of_message = message_lower[prefix_end:].strip()
+    else:
+        # Se non c'è prefisso, usa tutto il messaggio (potrebbe essere solo numeri e vini)
+        rest_of_message = message_lower
     
-    # Estrai parte dopo il prefisso
-    prefix_end = prefix_match.end()
-    rest_of_message = message_lower[prefix_end:].strip()
+    # Normalizza: sostituisci newline e virgole con " e " per unificare separatori
+    rest_of_message = re.sub(r'[\n,;]+', ' e ', rest_of_message)
     
-    # Split per " e " per trovare movimenti multipli
+    # Split per " e " per trovare movimenti multipli (supporta anche "e" singolo)
     parts = re.split(r'\s+e\s+', rest_of_message)
+    
+    # Pattern per riconoscere un singolo movimento: numero + (bottiglie di)? + nome vino
+    # NUMBER_PATTERN è già un gruppo: (\d+|un|uno|...)
+    movement_pattern = rf'^{NUMBER_PATTERN}\s+(?:bottiglie?\s+di\s+)?(.+)$'
     
     for part in parts:
         part = part.strip()
         if not part:
             continue
         
-        # Pattern: numero + (bottiglie di)? + nome vino
-        match = re.match(rf'^{NUMBER_PATTERN}\s+(?:bottiglie?\s+di\s+)?(.+)$', part, re.IGNORECASE)
+        # Prova pattern completo
+        match = re.match(movement_pattern, part, re.IGNORECASE)
         if match:
             quantity_str = match.group(1).strip()
             
@@ -353,6 +364,9 @@ def parse_multiple_movements(message_text: str, movement_type: str) -> List[Tupl
                     continue
             
             wine_name = match.group(2).strip()
-            movements.append((quantity, wine_name))
+            # Rimuovi punteggiatura finale comune
+            wine_name = re.sub(r'[,.;]+$', '', wine_name).strip()
+            if wine_name:
+                movements.append((quantity, wine_name))
     
     return movements
