@@ -177,9 +177,14 @@ class InventoryMovementManager:
         multiple_consumi = self._parse_multiple_movements(message_text, 'consumo')
         multiple_rifornimenti = self._parse_multiple_movements(message_text, 'rifornimento')
         
+        logger.info(
+            f"[MOVEMENT] Parsing multipli | consumi={len(multiple_consumi)}: {multiple_consumi}, "
+            f"rifornimenti={len(multiple_rifornimenti)}: {multiple_rifornimenti}"
+        )
+        
         # Se ci sono movimenti multipli, gestiscili
         if len(multiple_consumi) > 1:
-            logger.info(f"[MOVEMENT] Rilevati {len(multiple_consumi)} movimenti consumo multipli: {multiple_consumi}")
+            logger.info(f"[MOVEMENT] ✅ Rilevati {len(multiple_consumi)} movimenti consumo multipli: {multiple_consumi}")
             # Salva i movimenti multipli nel context per processarli sequenzialmente
             context.user_data['pending_movements'] = [
                 {'type': 'consumo', 'quantity': qty, 'wine_name': wine} 
@@ -191,7 +196,7 @@ class InventoryMovementManager:
             return await self._process_consumo(update, context, telegram_id, multiple_consumi[0][1], multiple_consumi[0][0])
         
         if len(multiple_rifornimenti) > 1:
-            logger.info(f"[MOVEMENT] Rilevati {len(multiple_rifornimenti)} movimenti rifornimento multipli: {multiple_rifornimenti}")
+            logger.info(f"[MOVEMENT] ✅ Rilevati {len(multiple_rifornimenti)} movimenti rifornimento multipli: {multiple_rifornimenti}")
             # Salva i movimenti multipli nel context per processarli sequenzialmente
             context.user_data['pending_movements'] = [
                 {'type': 'rifornimento', 'quantity': qty, 'wine_name': wine} 
