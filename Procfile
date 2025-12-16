@@ -1,2 +1,2 @@
-web: python start_bot.py
+web: python -m src.bot
 
